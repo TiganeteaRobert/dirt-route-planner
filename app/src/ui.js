@@ -934,9 +934,9 @@ function aiCard() {
   if (d) {
     return h('div', { class: 'card', id: 'ai-card' },
       h('div', { class: 'row' }, h('strong', { class: 'grow' }, 'AI-found tracks'), h('span', { class: 'badge ok' }, `unlocked ${d.version}`)),
-      h('p', { class: 'note' }, `${fmtInt(d.stats?.lines ?? d.ai?.features?.length ?? 0)} tracks, ${fmtInt(d.stats?.km ?? 0)} km that no map has, `
-        + 'joined to the route network (Plan and Investigate use the ones shown). Choose how sure the AI must be in Layers. '
-        + 'Kept on this phone; works offline.'),
+      h('p', { class: 'note' }, `${fmtInt(d.stats?.lines ?? 0)} tracks, ${fmtInt(d.stats?.km ?? 0)} km that no map has; `
+        + `${fmtInt(aiShown(settings.aiMin ?? 0.4).km)} km shown at your setting (Layers, under the AI layer). `
+        + 'Plan and Investigate use the ones shown. Kept on this phone; works offline.'),
       progress, err,
       aiJob ? null : h('div', { class: 'row-btns' }, btn('Update', () => runAi(null)), btn('Remove', removeAi)));
   }
@@ -977,7 +977,8 @@ async function runAi(pass) {
     app.graph = null;
     app.graphIndex = null;
     applyLayers(app.map);
-    toast(`AI tracks ${app.ai.meta.version}: ${fmtInt(app.ai.meta.stats?.km ?? 0)} km on the map and in your routes.`);
+    toast(`AI tracks ${app.ai.meta.version}: ${fmtInt(aiShown(settings.aiMin ?? 0.4).km)} km shown at your setting `
+      + `(${fmtInt(app.ai.meta.stats?.km ?? 0)} km in all), on the map and in your routes.`);
   } catch (e) {
     aiError = `Could not open it: ${e.message}.`;
   } finally {
