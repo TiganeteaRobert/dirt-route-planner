@@ -8,7 +8,8 @@
  3. ends of new lines within 25 m of each other that point at each other are joined (within 8 m in any case): a
     track under a tree, a faint bit the model missed;
  4. lines of 60 m and more stay (not wiggly when short, not mostly on buildings or bare ground, not a twin of a
-    longer one, sure enough under forest), with their mean probability (conf) and land cover along them.
+    longer one, sure enough under forest, near villages and when short, at least 0.45 sure, not a shore), with their
+    mean probability (conf) and land cover along them.
 -> data/ai/ai_lines.geojson (lon/lat). Private: derived from Esri imagery, never published as it is.
     uv run --with numpy --with scipy --with shapely --with scikit-image --with pillow python pipeline/ai_vectorize.py [low=0.2] [high=0.4]
 Hysteresis thresholds on the ridge map (see ridge): a line starts where it reaches `high` and runs on while above `low`.
@@ -44,7 +45,10 @@ MAX_WIGGLE = 1.6      # length / end-to-end distance above which a short line is
 BARE = 60             # WorldCover bare ground (quarries, rock): the model traces their rims
 TWIN = 8.0            # m: a line this close to a longer AI line along 60 % of it is the same track drawn twice
 FOREST_CONF = 0.8     # under mostly forest (tree share > 0.6) keep only lines the model is this sure of
-VILLAGE = 100.0       # m: lines mostly this close to buildings (where maps have the roads) are mostly parcel edges...
+VILLAGE = 200.0       # m: lines mostly this close to buildings (where maps have the roads) are mostly parcel edges...
+SHORT, SHORT_CONF = 100.0, 0.5   # m: shorter lines stay only when the model is at least this sure
+MIN_CONF = 0.45       # below this the lines are mostly terrace and field edges
+WATER = 30.0          # m: lines mostly this close to open water are shores (a reservoir's dry margin looks like a road)
 VILLAGE_CONF = 0.7    # ... and stay only when the model is this sure
 OFFS = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
 
@@ -199,14 +203,14 @@ def sample_pred(xy, X0, Y0):
     return out
 
 
-def landcover_sampler(X0, Y0, near_built=None):
-    """WorldCover class at points of the patch grid; with near_built (m): whether built-up land is that close."""
+def landcover_sampler(X0, Y0, near=None):
+    """WorldCover class at points of the patch grid; with near=(class, metres): whether that class is that close."""
     wc = np.load(AREA / "worldcover.npz")
     cls, (a, _, c, _, e, f) = wc["cls"], wc["transform"]
     n = 2 ** Z * 256
-    if near_built:
-        r = max(1, round(near_built / (a * 111320 * math.cos(math.radians(46.55)))))
-        cls = ndimage.maximum_filter((cls == 50).astype(np.uint8), size=2 * r + 1)
+    if near:
+        r = max(1, round(near[1] / (a * 111320 * math.cos(math.radians(46.55)))))
+        cls = ndimage.maximum_filter((cls == near[0]).astype(np.uint8), size=2 * r + 1)
 
     def sample(xy):
         lon = (xy[:, 0] + X0 * 256 + 0.5) / n * 360 - 180
@@ -289,7 +293,8 @@ def run(jobs, X0, Y0, out_path):
     lid = np.repeat(np.arange(len(pts)), [len(p) for p in pts])
     prob = sample_pred(allp, X0, Y0)
     lc = landcover_sampler(X0, Y0)(allp)
-    village = np.bincount(lid, landcover_sampler(X0, Y0, VILLAGE)(allp).astype(float), minlength=len(pts))
+    village = np.bincount(lid, landcover_sampler(X0, Y0, (50, VILLAGE))(allp).astype(float), minlength=len(pts))
+    shore = np.bincount(lid, landcover_sampler(X0, Y0, (80, WATER))(allp).astype(float), minlength=len(pts))
     cnt = np.bincount(lid, minlength=len(pts))
     conf = np.bincount(lid, prob, minlength=len(pts)) / cnt
     share = {name: np.bincount(lid, (lc == code).astype(float), minlength=len(pts)) / cnt
@@ -298,7 +303,7 @@ def run(jobs, X0, Y0, out_path):
     feats = []
     near = cKDTree(allp)
     kept = np.zeros(len(lines), bool)
-    n_twin = n_forest = n_village = 0
+    n_twin = n_forest = n_village = n_short = n_shore = 0
     for k in sorted(range(len(lines)), key=lambda k: -lines[k].length):          # longest first
         g = lines[k]
         if share["built"][k] > 0.5 or share["bare"][k] > 0.5:
@@ -308,6 +313,12 @@ def run(jobs, X0, Y0, out_path):
             continue
         if village[k] / cnt[k] > 0.5 and conf[k] < VILLAGE_CONF:
             n_village += 1
+            continue
+        if g.length * MPP < SHORT and conf[k] < SHORT_CONF or conf[k] < MIN_CONF:
+            n_short += 1
+            continue
+        if shore[k] / cnt[k] > 0.5:
+            n_shore += 1
             continue
         nb = near.query_ball_point(pts[k], TWIN / MPP)
         if np.mean([kept[lid[i]].any() if i else False for i in nb]) > 0.6:
@@ -324,7 +335,8 @@ def run(jobs, X0, Y0, out_path):
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump({"type": "FeatureCollection", "features": feats}, fh)
     km = sum(f["properties"]["len"] for f in feats) / 1000
-    print(f"dropped {n_twin} twins, {n_forest} unsure forest lines and {n_village} unsure village lines")
+    print(f"dropped {n_twin} twins, {n_forest} unsure forest lines, {n_village} unsure village lines, {n_short} unsure "
+          f"(short or below {MIN_CONF}) and {n_shore} shores")
     print(f"{out_path.name}: {len(feats)} lines, {km:.0f} km (skeleton {km_all:.0f} km, new {km_new:.0f} km), "
           f"{time.time() - t0:.0f} s")
 
