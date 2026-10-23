@@ -11,7 +11,7 @@
   tree               mean tree-cover share within 30 m (ESA WorldCover 2021)
   prot               protected area(s) the edge crosses
   routes             hiking / mtb / bicycle / horse route relations using the edge's way
--> data/area/edges_evidence.geojson and evidence_summary.json
+-> data/area/edges_evidence.geojson and evidence_summary.json (DS_AI=1: data/ai/, the private graph)
     uv run --with numpy --with scipy --with shapely python pipeline/evidence.py
 """
 import json
@@ -24,7 +24,7 @@ import shapely
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial import cKDTree
 
-from common import AREA, read_fc, write_fc
+from common import AREA, EDGES, read_fc, write_fc
 from copdem import CopDem
 
 STEP = 10.0
@@ -97,7 +97,7 @@ def profile_stats(e, d, flat=False):
 
 def main():
     t0 = time.time()
-    edges = read_fc(AREA / "edges.geojson")
+    edges = read_fc(EDGES / "edges.geojson")
     lon, lat, offs, spacing = sample_edges(edges)
     N = len(lon)
     edge_of = np.repeat(np.arange(len(edges)), np.diff(offs))
@@ -195,7 +195,7 @@ def main():
         if p["way"] in way_routes:
             p["routes"] = ",".join(sorted(way_routes[p["way"]]))
         out.append(edge)
-    write_fc(AREA / "edges_evidence.geojson", out)
+    write_fc(EDGES / "edges_evidence.geojson", out)
 
     # summary for a sanity check
     km = lambda sel: round(sum(e["properties"]["len"] for e in sel) / 1000)
@@ -212,7 +212,7 @@ def main():
             "km_forest_80": km([e for e in s if e["properties"]["tree"] >= 0.8]),
             "km_g50_over_25": km([e for e in s if (e["properties"].get("g50") or 0) > 25]),
         }
-    with open(AREA / "evidence_summary.json", "w") as fh:
+    with open(EDGES / "evidence_summary.json", "w") as fh:
         json.dump(summary, fh, indent=1)
     print(json.dumps(summary, indent=1))
     print(f"done in {time.time() - t0:.0f} s")

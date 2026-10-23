@@ -4,7 +4,8 @@ import { setWorkerUrl } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import { registerProtocols } from './tiles.js';
 import { initPacks } from './pack.js';
-import { createMap, applyLayers, setTracks, setRecLine, MeMarker } from './mapview.js';
+import { createMap, applyLayers, setTracks, setRecLine, setAi, MeMarker } from './mapview.js';
+import { loadStored as loadAi } from './aibundle.js';
 import { initUI, toast } from './ui.js';
 import { listTracks, mapData } from './tracks.js';
 import { downloader } from './downloads.js';
@@ -32,10 +33,12 @@ app.refreshTracks = async () => {
 };
 window.dirtscout = app;          // handy from the console when debugging on the phone, and for the e2e tests
 app.debug = { downloader, recorder, db, settings, applyLayers };
+app.ai = await loadAi();          // the owner's private AI layer, when it was unlocked on this phone
 
 initUI(app);
 
 app.map.on('load', async () => {
+  if (app.ai) setAi(app.map, app.ai.ai);
   applyLayers(app.map);
   document.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');   // start folded
   app.stats = await db.tileStats().catch(() => ({}));

@@ -12,3 +12,5 @@ private/
 tests/e2e/out*/
 # The area pack is built by pipeline/ and published as a release asset, not committed.
 app/public/pack/
+.venv-ml/
+__pycache__/

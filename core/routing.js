@@ -3,11 +3,11 @@
 import { decodePolyline } from './polyline.js';
 
 export const CLASSES = ['track', 'path', 'bridleway', 'unclassified', 'residential', 'service', 'living_street', 'road',
-  'tertiary', 'secondary', 'primary', 'trunk', 'detected'];
+  'tertiary', 'secondary', 'primary', 'trunk', 'detected', 'ai'];          // keep in step with pipeline/graph_pack.py
 // Cost factor by class: a dirt-bike ride prefers tracks over tarmac, and busy roads least of all. Looked up by name,
 // because each graph file carries its own class list (and the rider's roads add "mine").
 const CLASS_FACTOR = { track: 0.8, path: 1.0, bridleway: 1.0, unclassified: 1.1, residential: 1.3, service: 1.2,
-  living_street: 1.4, road: 1.15, tertiary: 1.5, secondary: 2.0, primary: 2.8, trunk: 4.0, detected: 0.9, mine: 0.75 };
+  living_street: 1.4, road: 1.15, tertiary: 1.5, secondary: 2.0, primary: 2.8, trunk: 4.0, detected: 0.9, ai: 1.0, mine: 0.75 };
 const RISK_FACTOR = [1.0, 1.3, 4.0];
 const PAVED_FACTOR = [1.0, 1.8, 1.15];          // unpaved, paved, unknown (when preferring dirt)
 const R = 6371008.8;

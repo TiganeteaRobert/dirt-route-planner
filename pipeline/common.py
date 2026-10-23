@@ -1,12 +1,17 @@
 """Shared settings for the area-pack pipeline (run on the PC with uv; see pipeline/README.md)."""
 import json
 import math
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
 AREA = ROOT / "data" / "area"
 AREA.mkdir(parents=True, exist_ok=True)
+# DS_AI=1: graph.py, evidence.py, score.mjs and graph_pack.py build the private graph with the AI-found tracks in
+# data/ai/ instead (never published as it is: derived from Esri imagery). Everything else reads data/area/.
+EDGES = ROOT / "data" / "ai" if os.environ.get("DS_AI") else AREA
+EDGES.mkdir(parents=True, exist_ok=True)
 
 # Riding area [west, south, east, north] - keep in sync with DEFAULT_AREA in app/src/config.js.
 BBOX = (22.85, 46.28, 23.80, 46.82)

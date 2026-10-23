@@ -16,6 +16,10 @@ and the research live in `private/HANDOFF.md` (gitignored). Read it before start
   main roads (p90 ~10 %). `core/scoring.js` is used both by `pipeline/score.mjs` and by the phone's track card.
 - The area pack is published as a `pack-*` GitHub release (not committed); the Pages workflow copies the newest one in.
 - `data/` (raw downloads, area pack) and `private/` are gitignored.
+- AI-found tracks (pipeline/README.md, steps A1-A7): a U-Net on Esri z17 imagery, 3-fold cross-fitting, line extraction,
+  a private graph (`DS_AI=1`), all in `data/ai/`. The phone gets them only as `pack/ai.enc` (AES-GCM, passphrase in
+  `private/ai_passphrase.txt`), opened in Offline > "Tracks the AI found" (`app/src/aibundle.js`, `core/aicrypt.js`).
+  `tests/e2e/ai.e2e.mjs` checks it with a test bundle (`tests/fixtures/aibundle.mjs`).
 
 ## Rules (binding unless the owner changes them)
 - Microsoft (Bing) and Esri imagery: the owner accepted the terms risk for personal use. Downloads stay inside the riding
@@ -25,6 +29,8 @@ and the research live in `private/HANDOFF.md` (gitignored). Read it before start
 - OSM-derived maps count as one source (same data), so stacking them adds no confidence.
 - The DEM is ~30 m and misses short steep pitches. Say so wherever slope is shown or scored.
 - The repo is public: no personal data, no GPX, no imagery in commits.
+- Anything derived from Esri imagery (the AI lines, their graph) is published only encrypted (`ai.enc`); never commit
+  the passphrase, the model weights, predictions or crops.
 
 ## Commands
 `npm run dev` | `npm test` | `npm run e2e` | `node tests/e2e/m2.e2e.mjs` | push to `main` = deploy to

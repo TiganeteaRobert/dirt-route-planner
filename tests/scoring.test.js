@@ -35,3 +35,13 @@ test('TET overlap lifts existence', () => {
   const p = { class: 'track', det: 0.1, tp: 0, len: 1000 };
   assert.ok(scoreEdge(p, { tet: 0.9 }).exists > scoreEdge(p).exists + 0.25);
 });
+
+test('an AI-found track: more sure = more likely, a legal note, no Microsoft bonus', () => {
+  const sure = scoreEdge({ class: 'ai', aic: 0.9, det: 0.9, tp: 0, len: 400 });
+  const unsure = scoreEdge({ class: 'ai', aic: 0.3, det: 0, tp: 0, len: 400 });
+  assert.ok(sure.exists > unsure.exists);
+  assert.equal(unsure.name, 'red');
+  assert.ok(sure.reasons.some((r) => r.code === 'unknown' && r.d === 'legal'));
+  assert.ok(!sure.reasons.some((r) => r.code === 'det'));
+  assert.ok(scoreEdge({ class: 'ai', aic: 0.8, tp: 30, tn: 3, len: 400 }).exists >= 0.75);   // ridden: traces lift it
+});

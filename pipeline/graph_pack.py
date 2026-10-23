@@ -1,18 +1,20 @@
 """Step 8b: the routing graph for the phone -> data/area/graph.json (column arrays; geometry as encoded polylines,
 precision 1e-5 deg ~1 m). Read by core/routing.js. Needs edges_evidence.geojson and edge_scores.json.
+DS_AI=1: the private graph with the AI-found tracks -> data/ai/graph.json (one more column: aic, the AI's confidence).
     uv run python pipeline/graph_pack.py
 """
 import json
+import os
 import time
 
-from common import AREA, read_fc
+from common import EDGES, read_fc
 
 PAVED = {"asphalt", "paved", "concrete", "concrete:plates", "concrete:lanes", "paving_stones", "sett", "cobblestone",
          "unhewn_cobblestone", "chipseal", "metal"}
 UNPAVED = {"unpaved", "gravel", "fine_gravel", "compacted", "dirt", "earth", "ground", "grass", "mud", "sand", "rock",
            "pebblestone", "woodchips", "grass_paver", "stone"}
 PAVED_CLASSES = {"residential", "living_street", "tertiary", "secondary", "primary", "trunk"}
-DIRT_CLASSES = {"track", "path", "bridleway", "detected"}
+DIRT_CLASSES = {"track", "path", "bridleway", "detected", "ai"}
 
 
 def paved(p, cls):
@@ -31,7 +33,7 @@ def paved(p, cls):
 
 # Class codes (index = code) - keep in step with core/routing.js CLASSES.
 CLASSES = ["track", "path", "bridleway", "unclassified", "residential", "service", "living_street", "road", "tertiary",
-           "secondary", "primary", "trunk", "detected"]
+           "secondary", "primary", "trunk", "detected", "ai"]
 
 
 def encode_polyline(coords, precision=5):
@@ -52,8 +54,9 @@ def encode_polyline(coords, precision=5):
 
 def main():
     t0 = time.time()
-    edges = read_fc(AREA / "edges_evidence.geojson")
-    scores = json.loads((AREA / "edge_scores.json").read_text())
+    edges = read_fc(EDGES / "edges_evidence.geojson")
+    scores = json.loads((EDGES / "edge_scores.json").read_text())
+    ai = bool(os.environ.get("DS_AI"))
     node_ix, lon, lat = {}, [], []
 
     def node(osm_id, c):
@@ -64,7 +67,8 @@ def main():
             lat.append(round(c[1] * 1e6))
         return i
 
-    cols = {k: [] for k in ("a", "b", "len", "cls", "risk", "lvl", "leg", "ex", "g", "gdir", "up", "dn", "tree", "det", "tt", "pav")}
+    cols = {k: [] for k in ("a", "b", "len", "cls", "risk", "lvl", "leg", "ex", "g", "gdir", "up", "dn", "tree", "det", "tt", "pav")
+            + (("aic",) if ai else ())}
     ids, names, geom = [], [], []
     for f in edges:
         p = f["properties"]
@@ -91,12 +95,14 @@ def main():
         cols["det"].append(round(100 * (p.get("det") or 0)))
         cols["tt"].append(int(tt[5]) if tt.startswith("grade") and tt[5:6].isdigit() else 0)
         cols["pav"].append(paved(p, cls))
+        if ai:
+            cols["aic"].append(round(100 * (p.get("aic") or 0)))
         ids.append(p["id"])
         names.append(p.get("name") or "")
         geom.append(encode_polyline(c))
     out = {"version": 1, "classes": CLASSES, "nodes": {"lon": lon, "lat": lat}, "edges": cols, "ids": ids,
            "names": names, "geom": geom}
-    path = AREA / "graph.json"
+    path = EDGES / "graph.json"
     path.write_text(json.dumps(out, separators=(",", ":")))
     print(f"graph: {len(lon)} nodes, {len(ids)} edges, {path.stat().st_size / 1e6:.1f} MB, {time.time() - t0:.0f} s")
 

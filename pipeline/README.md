@@ -51,6 +51,44 @@ gh release create pack-<version> data/area/area.pmtiles data/area/dem.pmtiles da
 
 The workflow always takes the newest release whose tag starts with `pack-`. Re-run the workflow after uploading.
 
+## AI-found tracks (private)
+
+A U-Net (ResNet-34 encoder) trained on Esri World Imagery z17 (~0.8 m/px) finds tracks that neither OSM nor
+Microsoft's detections have. Its lines are derived from Esri imagery, so they are never published as they are: the
+phone gets them in `ai.enc`, encrypted with the owner's passphrase (`private/ai_passphrase.txt`). The imagery tiles stay
+in `data/raw/imagery/` and are never shared. GPU steps run in `.venv-ml` (Python 3.12, torch 2.11.0+cu128,
+segmentation-models-pytorch 0.5.0); set `TORCH_HOME` to a folder on E: so the ImageNet weights do not land on C:.
+
+| Step | Script | Output (data/ai/) |
+|---|---|---|
+| A1 | `imagery.py 17` | data/raw/imagery/esri/17 (~100k tiles, 1.1 GB, at most 6 parallel requests) |
+| A2 | `ai_labels.py` | labels/ (known lines + ignore band + tree cover per 512 px patch), grid.json |
+| A3 | `ai_train.py <fold>` | model_f0-2.pt: cross-fitting, each model never trains on its own fold (~6.5 km blocks) |
+| A4 | `ai_infer.py [fold]` | pred/ (probability per patch; each fold predicted by its own model) |
+| A5 | `ai_vectorize.py` | ai_lines.geojson (skeleton lines not within 15 m of a known road, 60 m or longer) |
+| A6 | `DS_AI=1` graph.py, evidence.py, score.mjs, graph_pack.py | edges / evidence / scores / graph.json with class `ai` |
+| A7 | `ai_bundle.py` | ai.enc (gzip + AES-256-GCM, PBKDF2 key) and a copy in app/public/pack/ |
+
+```
+cd pipeline
+uv run python imagery.py 17 6
+uv run --with numpy --with pillow --with shapely python ai_labels.py
+../.venv-ml/Scripts/python ai_train.py 0      # two folds fit side by side on the 8 GB GPU (RAM is the limit)
+../.venv-ml/Scripts/python ai_train.py 1
+../.venv-ml/Scripts/python ai_train.py 2
+../.venv-ml/Scripts/python ai_infer.py
+uv run --with numpy --with scipy --with shapely --with scikit-image --with pillow python ai_vectorize.py
+DS_AI=1 uv run python graph.py
+DS_AI=1 uv run --with numpy --with scipy --with shapely python evidence.py
+DS_AI=1 node score.mjs
+DS_AI=1 uv run python graph_pack.py
+uv run --with cryptography python ai_bundle.py
+gh release upload pack-<version> ../data/ai/ai.enc --clobber     # then re-run the Pages workflow
+```
+
+The bundle carries a whole routing graph, so it keeps working when the public pack changes; rebuild it (A6-A7) with
+each new pack so both use the same OSM data, and upload it to the newest `pack-*` release (the workflow serves `*.enc`).
+
 ## What the evidence means (and does not)
 
 - **Grades** come from FABDEM, a bare-earth version of Copernicus GLO-30, smoothed over 30 m. They were tested on

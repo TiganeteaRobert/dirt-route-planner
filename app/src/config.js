@@ -72,6 +72,7 @@ export const DS_BASE = { id: 'ds-topo', name: 'DirtScout topo (area pack)' };
 export const DS_OVERLAY_LIST = [
   ['ds-tracks', 'Tracks & paths (DirtScout)', 'Opacity'],
   ['ds-unmapped', 'Roads seen from above, not in OSM', 'Opacity'],
+  ['ds-ai', 'Tracks the AI found (private)', 'Opacity'],
   ['ds-pois', 'Gates, fords, peaks, springs, huts', null],
   ['ds-places', 'Place names', null],
   ['ds-routes', 'Hiking / MTB routes (OSM)', 'Opacity'],

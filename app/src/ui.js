@@ -1,7 +1,8 @@
 // Panels (one bottom sheet at a time), the toolbar, status pills and toasts.
 import { SOURCES, LOCAL_OVERLAYS, SLOPE_CLASSES, OFFLINE_SOURCES, APP_NAME, DS_BASE, DS_OVERLAY_LIST } from './config.js';
 import { settings, saveSettings, defaultArea } from './settings.js';
-import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw } from './mapview.js';
+import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw, setAi } from './mapview.js';
+import { unlock as aiUnlock, update as aiUpdate, removeStored as aiRemove } from './aibundle.js';
 import { augmentGraph } from '../../core/usergraph.js';
 import { buildIndex, investigate } from '../../core/investigate.js';
 import { COLOR_MODES, DS_TRACK_LAYERS } from './dsstyle.js';
@@ -158,10 +159,15 @@ async function renderLayers() {
       : 'Install the area pack (Offline) to see the DirtScout map with no network.'));
   }
   for (const [id, name, sliderLabel] of DS_OVERLAY_LIST) {
+    if (id === 'ds-ai' && !app.ai) continue;
     const o = settings.overlays[id];
     out.push(h('div', { class: 'block' },
-      h('label', { class: `row${packUsable() ? '' : ' dim'}` },
-        h('input', { type: 'checkbox', checked: o.on, onchange: (e) => { o.on = e.target.checked; saveSettings(); applyLayers(app.map); rerender(); } }),
+      h('label', { class: `row${packUsable() || id === 'ds-ai' ? '' : ' dim'}` },
+        h('input', { type: 'checkbox', checked: o.on, onchange: (e) => {
+          o.on = e.target.checked; saveSettings(); applyLayers(app.map);
+          if (id === 'ds-ai') { app.graph = null; app.graphIndex = null; }        // routes follow what the map shows
+          rerender();
+        } }),
         h('span', { class: 'grow' }, name)),
       o.on && sliderLabel ? h('label', { class: 'slider' }, h('span', {}, sliderLabel),
         h('input', {
@@ -220,7 +226,7 @@ function colorByControl() {
 const CLASS_NAMES = { track: 'Track', path: 'Path', bridleway: 'Bridleway', footway: 'Footway (no motors)', cycleway: 'Cycleway',
   steps: 'Steps', unclassified: 'Minor road', residential: 'Village street', service: 'Service road', tertiary: 'Tertiary road',
   secondary: 'Secondary road', primary: 'Primary road', trunk: 'Trunk road', motorway: 'Motorway', living_street: 'Living street',
-  detected: 'Road seen from above (not in OSM)', mine: 'Your road' };
+  detected: 'Road seen from above (not in OSM)', ai: 'Track the AI found (on no map)', mine: 'Your road' };
 const SAC = { hiking: 'T1 hiking', mountain_hiking: 'T2 mountain hiking', demanding_mountain_hiking: 'T3 demanding',
   alpine_hiking: 'T4 alpine', demanding_alpine_hiking: 'T5 demanding alpine', difficult_alpine_hiking: 'T6 difficult alpine' };
 
@@ -247,6 +253,9 @@ function renderInfo() {
     kv('Ref', p.ref), kv('Surface', p.surf), kv('Smoothness', p.smooth), kv('Hiking scale', SAC[p.sac] ?? p.sac),
     kv('MTB scale', p.mtb), kv('Trail visibility', p.vis), kv('4WD only', p.fwd), kv('Motor access', p.acc ?? 'not tagged'),
     kv('Gates / barriers on it', p.bar), kv('Ford', p.ford ? 'yes' : null), kv('Bridge', p.bridge ? 'yes' : null),
+    p.class === 'ai' ? kv('AI confidence', p.aic != null ? `${Math.round(p.aic * 100)} %` : null) : null,
+    p.class === 'ai' ? kv('Land along it', [p.grass ? `${Math.round(p.grass * 100)} % grassland` : null,
+      p.crop ? `${Math.round(p.crop * 100)} % fields` : null].filter(Boolean).join(', ')) : null,
   ];
   if (p.det != null) {
     const s = scoreEdge(p);
@@ -266,8 +275,12 @@ function renderInfo() {
       kv('OSM edits', [p.ver ? `version ${p.ver}` : null, p.yr ? `last edited ${p.yr}` : null, p.src ? `source: ${p.src}` : null].filter(Boolean).join(', ')),
       h('p', { class: 'note' }, 'Grades come from a 30 m elevation model: a short steep pitch can hide inside a gentle number.'));
   }
-  if (p.class === 'detected') {
-    out.push(h('p', { class: 'note' }, 'Microsoft\'s AI found this road in Bing imagery (mostly 2020-2022); nobody has mapped it '
+  if (p.class === 'detected' || p.class === 'ai') {
+    out.push(h('p', { class: 'note' }, p.class === 'ai'
+      ? 'DirtScout\'s own AI found this line in Esri satellite imagery, and no map has it. It is most likely a farm or '
+        + 'forest track, but it can be a field edge, a ditch, a fence line or private land, and its surface and access are '
+        + 'unknown. Check it on the imagery before riding. Private: only on your phone, from your own file.'
+      : 'Microsoft\'s AI found this road in Bing imagery (mostly 2020-2022); nobody has mapped it '
       + 'in OpenStreetMap, so its surface, name and access are unknown. Check it on the imagery. If you ride it, you can add it '
       + 'to OpenStreetMap so every map gets it.'));
     const c = f.geometry.type === 'LineString' ? f.geometry.coordinates : f.geometry.coordinates[0];
@@ -308,9 +321,12 @@ function onMapClick(e) {
 const RISK_COLORS = ['#00e676', '#ffd600', '#ff1744'];
 const UNMAPPED = '#e040fb';
 
+// The unlocked AI bundle carries a whole route network with its tracks: use it while its layer is on.
+const aiRouting = () => !!app.ai?.graph && settings.overlays['ds-ai']?.on !== false;
+
 async function ensureGraph() {
   if (!app.graph) {
-    const json = await loadGraphJson();
+    const json = aiRouting() ? app.ai.graph : await loadGraphJson();
     if (!json) throw new Error('the route network is not on this phone: install the area pack (Offline) or go online');
     const roads = app.tracks.filter((t) => t.network).flatMap((t) => trackLines(t).map((coords, k) => ({
       id: `${t.id}#${k}`, name: t.name, coords: coords.map((c) => [c[0], c[1]]),
@@ -380,7 +396,7 @@ function renderInvestigation() {
     out.push(h('h3', {}, 'Risky stretches'));
     for (const s of r.stretches) {
       const why = [...new Set(s.parts.map((x) => (x.e === null ? 'not on any mapped way'
-        : `${x.cls}${x.name ? ` "${x.name}"` : ''}${x.legal === 2 ? ', closed to motors' : ''}${x.grade ? `, about ${Math.round(x.grade)} %` : ''}`)))];
+        : `${x.cls === 'ai' ? 'a track the AI found' : x.cls}${x.name ? ` "${x.name}"` : ''}${x.legal === 2 ? ', closed to motors' : ''}${x.grade ? `, about ${Math.round(x.grade)} %` : ''}`)))];
       out.push(item(s.from, s.to, why.join('; '), `k-${s.kind}`));
     }
   }
@@ -865,6 +881,76 @@ async function startDownload() {
 }
 
 let packJob = null;          // {name, got, total} while installing
+let aiJob = null;            // {got, total} while the AI file downloads and opens
+let aiError = null;
+let aiPass = '';
+
+// The owner's private layer: tracks DirtScout's model found in satellite imagery (pack/ai.enc, opened with a passphrase).
+function aiCard() {
+  const d = app.ai;
+  const progress = aiJob ? [
+    h('div', { class: 'bar' }, h('div', { style: `width:${aiJob.total ? Math.floor((100 * aiJob.got) / aiJob.total) : 5}%` })),
+    h('p', { class: 'note' }, aiJob.got && aiJob.got === aiJob.total ? 'Opening…' : `Downloading ${fmtBytes(aiJob.got)}${aiJob.total ? ` of ${fmtBytes(aiJob.total)}` : ''}`),
+  ] : null;
+  const err = aiError ? h('p', { class: 'note warn' }, aiError) : null;
+  if (d) {
+    return h('div', { class: 'card', id: 'ai-card' },
+      h('div', { class: 'row' }, h('strong', { class: 'grow' }, 'AI-found tracks'), h('span', { class: 'badge ok' }, `unlocked ${d.version}`)),
+      h('p', { class: 'note' }, `${fmtInt(d.stats?.lines ?? d.ai?.features?.length ?? 0)} tracks, ${fmtInt(d.stats?.km ?? 0)} km that no map has, `
+        + 'joined to the route network (Plan and Investigate use them while their layer is on). Kept on this phone; works offline.'),
+      progress, err,
+      aiJob ? null : h('div', { class: 'row-btns' }, btn('Update', () => runAi(null)), btn('Remove', removeAi)));
+  }
+  return h('div', { class: 'card', id: 'ai-card' },
+    h('p', { class: 'note' }, 'Your private layer: tracks DirtScout\'s own model found in satellite imagery that no map has. '
+      + 'The file is encrypted; type your passphrase once to open it.'),
+    h('label', { class: 'row' }, h('span', {}, 'Passphrase'),
+      h('input', { class: 'grow', id: 'ai-pass', type: 'text', value: aiPass, autocomplete: 'off', autocapitalize: 'off',
+        autocorrect: 'off', spellcheck: 'false', placeholder: 'xxxx-xxxx-xxxx-xxxx',
+        oninput: (e) => { aiPass = e.target.value; },
+        onkeydown: (e) => { if (e.key === 'Enter') runAi(aiPass); } })),
+    progress, err,
+    aiJob ? null : h('div', { class: 'row-btns' }, btn('Unlock', () => runAi(aiPass), 'primary')));
+}
+
+async function runAi(pass) {
+  if (aiJob) return;
+  if (pass != null && !pass.trim()) { aiError = 'Type the passphrase first.'; rerender(); return; }
+  aiJob = { got: 0, total: 0 };
+  aiError = null;
+  rerender();
+  let last = 0;
+  const onProgress = (got, total) => {
+    aiJob.got = got;
+    aiJob.total = total;
+    if (performance.now() - last > 300) { last = performance.now(); if (current === 'downloads') rerender(); }
+  };
+  try {
+    app.ai = pass == null ? await aiUpdate(onProgress) : await aiUnlock(pass, onProgress);
+    aiPass = '';
+    setAi(app.map, app.ai.ai);
+    app.graph = null;
+    app.graphIndex = null;
+    applyLayers(app.map);
+    toast(`AI tracks ${app.ai.version}: ${fmtInt(app.ai.stats?.km ?? 0)} km on the map and in your routes.`);
+  } catch (e) {
+    aiError = `Could not open it: ${e.message}.`;
+  } finally {
+    aiJob = null;
+    rerender();
+  }
+}
+
+async function removeAi() {
+  if (!confirm('Remove the AI-found tracks from this phone? You can unlock them again with the passphrase.')) return;
+  await aiRemove();
+  app.ai = null;
+  setAi(app.map, null);
+  app.graph = null;
+  app.graphIndex = null;
+  applyLayers(app.map);
+  rerender();
+}
 
 async function packCard() {
   const man = await fetchManifest();
@@ -936,6 +1022,7 @@ async function renderDownloads() {
       : 'Not protected yet: Chrome may clear it if the phone runs out of space. DirtScout asks for protection with the first download; installing the app helps.'))];
 
   out.push(h('h3', {}, 'Area pack'), await packCard());
+  out.push(h('h3', {}, 'Tracks the AI found (private)'), aiCard());
 
   out.push(h('h3', {}, 'Saved on this phone'));
   for (const id of OFFLINE_SOURCES) {

@@ -3,7 +3,8 @@
 // Starting weights from the plan (HANDOFF section 12), to be tuned with the rider's feedback.
 //
 // Input: edge properties as in the area pack's "tracks" layer (class, tt, smooth, sac, mtb, vis, acc, det, tp, tn,
-// tree, g50, g100, gall, routes, src, ver, yr, len) plus optional extras {tet: overlap share 0-1 with TET/ACT tracks}.
+// tree, g50, g100, gall, routes, src, ver, yr, len; aic = the AI's confidence 0-1 for class "ai", the owner's private
+// layer) plus optional extras {tet: overlap share 0-1 with TET/ACT tracks}.
 
 const ROADS = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary']);
 const MINOR = new Set(['unclassified', 'residential', 'living_street', 'service', 'road']);
@@ -35,11 +36,15 @@ export function scoreEdge(p, extras = {}) {
   else if (MINOR.has(cls)) { exists = 0.6; add('minor', 'mapped as a minor road / street', 0.6); }
   else if (cls === 'track') { exists = 0.5; add('track', 'mapped as a track', 0.5); }
   else if (cls === 'detected') { exists = 0.55; add('detected', 'seen from above by Microsoft in Bing imagery, not in OSM', 0.55); }
+  else if (cls === 'ai') {
+    exists = 0.35 + 0.25 * Math.min(1, p.aic ?? 0.5);
+    add('ai', `found by DirtScout's AI in satellite imagery (${Math.round((p.aic ?? 0.5) * 100)} % sure), on no map`, Math.round(exists * 100) / 100);
+  }
   else { exists = 0.35; add('path', `mapped as a ${cls ?? 'way'}`, 0.35); }
 
   if (p.src && /survey|gps|gnss/i.test(p.src)) { exists += 0.1; add('survey', 'mapped from a ground survey or GPS', 0.1); }
   if ((p.ver ?? 0) >= 3) { exists += 0.05; add('edits', `edited ${p.ver} times in OSM`, 0.05); }
-  if (p.det != null && cls !== 'detected') {
+  if (p.det != null && cls !== 'detected' && cls !== 'ai') {
     if (p.det >= 0.7) { exists += 0.25; add('det', `seen from above along ${Math.round(p.det * 100)} % of it`, 0.25); }
     else if (p.det >= 0.3) { exists += 0.1; add('det', `seen from above along ${Math.round(p.det * 100)} % of it`, 0.1); }
   }
@@ -78,6 +83,7 @@ export function scoreEdge(p, extras = {}) {
   else if (p.acc && RESTRICTED.has(p.acc)) { legal = 'restricted'; add('access', `motor access "${p.acc}" in OSM`, 'legal'); }
   if (p.prot) add('protected', 'inside a protected area: check the rules', 'legal');
   if (cls === 'detected') add('unknown', 'not in OSM: name, surface and access unknown', 'legal');
+  if (cls === 'ai') add('unknown', 'on no map: surface and access unknown; it could be private, a field edge or a ditch', 'legal');
 
   // ---- class ----
   let cls3;

@@ -3,12 +3,15 @@ major roads; no motorways, footways, steps or cycleways) split at every junction
 model saw from above that OSM does not have (class "detected", from detected_only.py). A detected road whose end
 comes within 30 m of an OSM edge is joined to it there (the OSM edge is split at that point); ends of detected roads
 within 12 m of each other are joined too.
+DS_AI=1: also the tracks our own model found (class "ai", data/ai/ai_lines.geojson from ai_vectorize.py), joined the
+same way -> data/ai/edges.geojson, the private graph.
 -> data/area/edges.geojson (one LineString per edge: from/to node, length, the way's tags, version, timestamp,
    gates or other barriers on it). New nodes have negative ids.
     uv run --with numpy --with shapely python pipeline/graph.py
 """
 import itertools
 import math
+import os
 import time
 from collections import Counter, defaultdict
 
@@ -16,7 +19,7 @@ import numpy as np
 import shapely
 from shapely.ops import substring
 
-from common import AREA, haversine, read_fc, write_fc
+from common import AREA, EDGES, haversine, read_fc, write_fc
 
 ROUTABLE = {
     "track", "path", "bridleway", "unclassified", "residential", "service", "tertiary", "tertiary_link",
@@ -78,8 +81,19 @@ def osm_edges():
     return edges
 
 
-def add_detected(edges):
-    det = read_fc(AREA / "ms_not_in_osm.geojson") if (AREA / "ms_not_in_osm.geojson").exists() else []
+def detected_props(k, f):
+    return {"id": f"d{k}", "way": None, "highway": "detected", "source": "Microsoft Road Detections",
+            "mswidth": f["properties"].get("w")}
+
+
+def ai_props(k, f):
+    p = f["properties"]
+    return {"id": f"ai{k}", "way": None, "highway": "ai", "source": "DirtScout AI (Esri imagery)", "aic": p.get("conf"),
+            "aicrop": p.get("crop"), "aigrass": p.get("grass")}
+
+
+def add_lines(edges, det, make_props):
+    """Joins lines that are not in OSM to the network (see the module notes); make_props(k, feature) -> their tags."""
     if not det:
         return edges, 0, 0
     geom = [shapely.linestrings(to_m(e["geometry"]["coordinates"])) for e in edges]
@@ -118,9 +132,7 @@ def add_detected(edges):
         pts = ([list(pa.coords)[0]] if pa is not None else []) + xy.tolist() + ([list(pb.coords)[0]] if pb is not None else [])
         c = to_ll(pts)
         det_edges.append({"type": "Feature",
-                          "properties": {"id": f"d{k}", "way": None, "from": na, "to": nb, "len": round(length_ll(c), 1),
-                                         "highway": "detected", "source": "Microsoft Road Detections",
-                                         "mswidth": f["properties"].get("w"), "_bar": []},
+                          "properties": {**make_props(k, f), "from": na, "to": nb, "len": round(length_ll(c), 1), "_bar": []},
                           "geometry": {"type": "LineString", "coordinates": c}})
 
     # cut the OSM edges where detected roads join them
@@ -149,12 +161,16 @@ def add_detected(edges):
 def main():
     t0 = time.time()
     edges = osm_edges()
-    edges, n_det, n_split = add_detected(edges)
+    det = read_fc(AREA / "ms_not_in_osm.geojson") if (AREA / "ms_not_in_osm.geojson").exists() else []
+    edges, n_det, n_split = add_lines(edges, det, detected_props)
+    if os.environ.get("DS_AI"):
+        edges, n_ai, n_split_ai = add_lines(edges, read_fc(EDGES / "ai_lines.geojson"), ai_props)
+        print(f"AI tracks: {n_ai} added, {n_split_ai} edges split to join them")
     for e in edges:
         bar = e["properties"].pop("_bar")
         if bar:
             e["properties"]["barriers"] = sorted({kind for _, kind in bar})
-    write_fc(AREA / "edges.geojson", edges)
+    write_fc(EDGES / "edges.geojson", edges)
     km = Counter()
     for e in edges:
         km[e["properties"]["highway"]] += e["properties"]["len"] / 1000

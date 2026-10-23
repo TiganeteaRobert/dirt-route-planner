@@ -5,7 +5,7 @@ import { SOURCES, DS_BASE } from './config.js';
 import { settings, saveSettings } from './settings.js';
 import { networkAllowed } from './tiles.js';
 import { installed } from './pack.js';
-import { topoBaseLayers, overlayLayers, labelLayers, trackColor, addIcons, DS_TRACK_LAYERS } from './dsstyle.js';
+import { topoBaseLayers, overlayLayers, aiLayers, labelLayers, trackColor, addIcons, DS_TRACK_LAYERS } from './dsstyle.js';
 import { circleRing } from '../../core/geo.js';
 
 const RASTER_BASES = Object.keys(SOURCES).filter((id) => SOURCES[id].kind === 'base');
@@ -17,6 +17,7 @@ const APP_BASE = location.href.replace(/[?#].*$/, '').replace(/[^/]*$/, '');
 export const DS_OVERLAYS = {
   'ds-tracks': ['ds-tracks-casing', 'ds-tracks', 'ds-tracks-dash', 'ds-tracks-dot', 'ds-selected'],
   'ds-unmapped': ['ds-det-casing', 'ds-tracks-det'],
+  'ds-ai': ['ds-ai-casing', 'ds-tracks-ai', 'ds-ai-selected'],
   'ds-detections': ['ds-detections'],
   'ds-routes': ['ds-routes'],
   'ds-contours': ['ds-contours', 'ds-contour-labels'],
@@ -61,6 +62,8 @@ function buildStyle() {
     layers.push({ id, type: 'raster', source: id, layout: { visibility: 'none' } });
   }
   layers.push(...overlayLayers());
+  sources.ai = { type: 'geojson', data: EMPTY_FC };
+  layers.push(...aiLayers());
   sources.area = { type: 'geojson', data: areaFeature(settings.area) };
   layers.push({
     id: 'area', type: 'line', source: 'area',
@@ -200,15 +203,18 @@ export function applyLayers(map) {
   const usable = packUsable();
   for (const [id, layers] of Object.entries(DS_OVERLAYS)) {
     const o = ov[id] ?? { on: false, opacity: 1 };
-    const on = usable && (o.on || (topo && ['ds-tracks', 'ds-unmapped', 'ds-places', 'ds-pois', 'ds-contours'].includes(id)));
+    // the AI layer is the owner's own file on the phone: it shows with or without the area pack
+    const on = id === 'ds-ai' ? o.on : usable && (o.on || (topo && ['ds-tracks', 'ds-unmapped', 'ds-places', 'ds-pois', 'ds-contours'].includes(id)));
     for (const l of layers) vis(map, l, on);
   }
   const color = trackColor(settings.colorBy);
   for (const l of DS_TRACK_LAYERS) {
     map.setPaintProperty(l, 'line-color', color);
-    map.setPaintProperty(l, 'line-opacity', (l === 'ds-tracks-det' ? ov['ds-unmapped'] : ov['ds-tracks'])?.opacity ?? 1);
+    const o = l === 'ds-tracks-det' ? ov['ds-unmapped'] : l === 'ds-tracks-ai' ? ov['ds-ai'] : ov['ds-tracks'];
+    map.setPaintProperty(l, 'line-opacity', o?.opacity ?? 1);
   }
   map.setPaintProperty('ds-det-casing', 'line-color', topo ? '#ffffff' : '#000000');
+  map.setPaintProperty('ds-ai-casing', 'line-color', topo ? '#ffffff' : '#000000');
   map.setPaintProperty('ds-tracks-casing', 'line-color', topo ? '#ffffff' : '#000000');
   map.setPaintProperty('ds-tracks-casing', 'line-opacity', (topo ? 0.9 : 0.5) * (ov['ds-tracks']?.opacity ?? 1));
   map.setPaintProperty('ds-detections', 'line-opacity', ov['ds-detections']?.opacity ?? 0.85);
@@ -237,6 +243,12 @@ export function setPlan(map, fc) {
 
 export function setSelected(map, id) {
   map.setFilter('ds-selected', ['==', ['get', 'id'], id ?? '__none__']);
+  map.setFilter('ds-ai-selected', ['==', ['get', 'id'], id ?? '__none__']);
+}
+
+// The AI-found tracks of the unlocked bundle (a FeatureCollection), or none.
+export function setAi(map, fc) {
+  map.getSource('ai')?.setData(fc ?? EMPTY_FC);
 }
 
 export function setArea(map, bbox) {
