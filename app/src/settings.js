@@ -14,6 +14,7 @@ const DEFAULTS = {
     'wmt-hiking': { on: false, opacity: 0.9 },
     'osm-gps': { on: false, opacity: 0.8 },
     'ds-tracks': { on: true, opacity: 1 },
+    'ds-unmapped': { on: true, opacity: 1 },
     'ds-pois': { on: true, opacity: 1 },
     'ds-places': { on: true, opacity: 1 },
     'ds-routes': { on: false, opacity: 0.55 },

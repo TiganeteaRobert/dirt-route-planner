@@ -216,7 +216,8 @@ function colorByControl() {
 
 const CLASS_NAMES = { track: 'Track', path: 'Path', bridleway: 'Bridleway', footway: 'Footway (no motors)', cycleway: 'Cycleway',
   steps: 'Steps', unclassified: 'Minor road', residential: 'Village street', service: 'Service road', tertiary: 'Tertiary road',
-  secondary: 'Secondary road', primary: 'Primary road', trunk: 'Trunk road', motorway: 'Motorway', living_street: 'Living street' };
+  secondary: 'Secondary road', primary: 'Primary road', trunk: 'Trunk road', motorway: 'Motorway', living_street: 'Living street',
+  detected: 'Road seen from above (not in OSM)' };
 const SAC = { hiking: 'T1 hiking', mountain_hiking: 'T2 mountain hiking', demanding_mountain_hiking: 'T3 demanding',
   alpine_hiking: 'T4 alpine', demanding_alpine_hiking: 'T5 demanding alpine', difficult_alpine_hiking: 'T6 difficult alpine' };
 
@@ -262,7 +263,14 @@ function renderInfo() {
       kv('OSM edits', [p.ver ? `version ${p.ver}` : null, p.yr ? `last edited ${p.yr}` : null, p.src ? `source: ${p.src}` : null].filter(Boolean).join(', ')),
       h('p', { class: 'note' }, 'Grades come from a 30 m elevation model: a short steep pitch can hide inside a gentle number.'));
   }
-  if (way) out.push(h('a', { class: 'btn', href: `https://www.openstreetmap.org/way/${way}`, target: '_blank', rel: 'noopener' }, 'Open in OpenStreetMap'));
+  if (p.class === 'detected') {
+    out.push(h('p', { class: 'note' }, 'Microsoft\'s AI found this road in Bing imagery (mostly 2020-2022); nobody has mapped it '
+      + 'in OpenStreetMap, so its surface, name and access are unknown. Check it on the imagery. If you ride it, you can add it '
+      + 'to OpenStreetMap so every map gets it.'));
+    const c = f.geometry.type === 'LineString' ? f.geometry.coordinates : f.geometry.coordinates[0];
+    const [lon, lat] = c[Math.floor(c.length / 2)];
+    out.push(h('a', { class: 'btn', href: `https://www.openstreetmap.org/edit#map=18/${lat.toFixed(5)}/${lon.toFixed(5)}`, target: '_blank', rel: 'noopener' }, 'Add it in OpenStreetMap'));
+  } else if (way) out.push(h('a', { class: 'btn', href: `https://www.openstreetmap.org/way/${way}`, target: '_blank', rel: 'noopener' }, 'Open in OpenStreetMap'));
   return out;
 }
 

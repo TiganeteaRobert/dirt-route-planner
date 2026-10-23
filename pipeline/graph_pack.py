@@ -12,7 +12,7 @@ PAVED = {"asphalt", "paved", "concrete", "concrete:plates", "concrete:lanes", "p
 UNPAVED = {"unpaved", "gravel", "fine_gravel", "compacted", "dirt", "earth", "ground", "grass", "mud", "sand", "rock",
            "pebblestone", "woodchips", "grass_paver", "stone"}
 PAVED_CLASSES = {"residential", "living_street", "tertiary", "secondary", "primary", "trunk"}
-DIRT_CLASSES = {"track", "path", "bridleway"}
+DIRT_CLASSES = {"track", "path", "bridleway", "detected"}
 
 
 def paved(p, cls):
@@ -31,7 +31,7 @@ def paved(p, cls):
 
 # Class codes (index = code) - keep in step with core/routing.js CLASSES.
 CLASSES = ["track", "path", "bridleway", "unclassified", "residential", "service", "living_street", "road", "tertiary",
-           "secondary", "primary", "trunk"]
+           "secondary", "primary", "trunk", "detected"]
 
 
 def encode_polyline(coords, precision=5):

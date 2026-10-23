@@ -1,11 +1,20 @@
 """Step 6: the routable graph. Ways a motorcycle might use (tracks, paths and bridleways with their flags, minor and
-major roads; no motorways, footways, steps or cycleways) split at every junction into edges.
+major roads; no motorways, footways, steps or cycleways) split at every junction into edges, plus the roads Microsoft's
+model saw from above that OSM does not have (class "detected", from detected_only.py). A detected road whose end
+comes within 30 m of an OSM edge is joined to it there (the OSM edge is split at that point); ends of detected roads
+within 12 m of each other are joined too.
 -> data/area/edges.geojson (one LineString per edge: from/to node, length, the way's tags, version, timestamp,
-   gates or other barriers on it).
-    uv run python pipeline/graph.py
+   gates or other barriers on it). New nodes have negative ids.
+    uv run --with numpy --with shapely python pipeline/graph.py
 """
+import itertools
+import math
 import time
-from collections import Counter
+from collections import Counter, defaultdict
+
+import numpy as np
+import shapely
+from shapely.ops import substring
 
 from common import AREA, haversine, read_fc, write_fc
 
@@ -19,10 +28,26 @@ KEEP_TAGS = (
     "mtb:scale:uphill", "trail_visibility", "source", "check_date", "bridge", "tunnel", "ford", "oneway",
     "seasonal", "service", "informal", "abandoned", "disused", "construction",
 )
+LON0, LAT0 = 23.3, 46.55
+KY = 111132.92 - 559.82 * math.cos(math.radians(2 * LAT0))
+KX = 111412.84 * math.cos(math.radians(LAT0))
+SNAP_OSM, SNAP_END, NEAR_NODE = 30.0, 12.0, 8.0
 
 
-def main():
-    t0 = time.time()
+def to_m(c):
+    a = np.asarray(c, dtype=float)
+    return np.column_stack([(a[:, 0] - LON0) * KX, (a[:, 1] - LAT0) * KY])
+
+
+def to_ll(xy):
+    return [[round(x / KX + LON0, 7), round(y / KY + LAT0, 7)] for x, y in xy]
+
+
+def length_ll(c):
+    return sum(haversine(c[k - 1], c[k]) for k in range(1, len(c)))
+
+
+def osm_edges():
     ways = [f for f in read_fc(AREA / "osm_highways.geojson") if f["properties"].get("highway") in ROUTABLE]
     barriers = {f["properties"]["osm_id"]: f["properties"]["kind"]
                 for f in read_fc(AREA / "osm_points.geojson")
@@ -43,20 +68,98 @@ def main():
             if use[nodes[i]] < 2 and i < len(nodes) - 1:
                 continue
             part = coords[start:i + 1]
-            length = sum(haversine(part[k - 1], part[k]) for k in range(1, len(part)))
-            on = [barriers[n] for n in nodes[start:i + 1] if n in barriers]
+            on = [(k - start, barriers[n]) for k, n in enumerate(nodes[start:i + 1], start) if n in barriers]
             edges.append({"type": "Feature",
                           "properties": {"id": f"{p['osm_id']}:{seq}", "way": p["osm_id"], "from": nodes[start],
-                                         "to": nodes[i], "len": round(length, 1), **tags,
-                                         "version": p.get("version"), "ts": p.get("ts"),
-                                         **({"barriers": sorted(set(on))} if on else {})},
+                                         "to": nodes[i], "len": round(length_ll(part), 1), **tags,
+                                         "version": p.get("version"), "ts": p.get("ts"), "_bar": on},
                           "geometry": {"type": "LineString", "coordinates": part}})
             start, seq = i, seq + 1
+    return edges
+
+
+def add_detected(edges):
+    det = read_fc(AREA / "ms_not_in_osm.geojson") if (AREA / "ms_not_in_osm.geojson").exists() else []
+    if not det:
+        return edges, 0, 0
+    geom = [shapely.linestrings(to_m(e["geometry"]["coordinates"])) for e in edges]
+    tree = shapely.STRtree(geom)
+    splits = defaultdict(list)              # OSM edge index -> [(position along it, node id)]
+    ends = []                               # (point, node id) of free detected ends, for joining them
+    new_id = itertools.count(-1, -1)
+
+    def snap(pt):
+        i = int(tree.nearest(pt))
+        if geom[i].distance(pt) <= SNAP_OSM:
+            g, p = geom[i], edges[i]["properties"]
+            s = g.project(pt)
+            if s < NEAR_NODE:
+                return p["from"], g.interpolate(0)
+            if s > g.length - NEAR_NODE:
+                return p["to"], g.interpolate(g.length)
+            for s2, nid in splits[i]:
+                if abs(s2 - s) < NEAR_NODE:
+                    return nid, g.interpolate(s2)
+            nid = next(new_id)
+            splits[i].append((s, nid))
+            return nid, g.interpolate(s)
+        for q, nid in ends:
+            if q.distance(pt) <= SNAP_END:
+                return nid, q
+        nid = next(new_id)
+        ends.append((pt, nid))
+        return nid, None
+
+    det_edges = []
+    for k, f in enumerate(det):
+        xy = to_m(f["geometry"]["coordinates"])
+        na, pa = snap(shapely.Point(xy[0]))
+        nb, pb = snap(shapely.Point(xy[-1]))
+        pts = ([list(pa.coords)[0]] if pa is not None else []) + xy.tolist() + ([list(pb.coords)[0]] if pb is not None else [])
+        c = to_ll(pts)
+        det_edges.append({"type": "Feature",
+                          "properties": {"id": f"d{k}", "way": None, "from": na, "to": nb, "len": round(length_ll(c), 1),
+                                         "highway": "detected", "source": "Microsoft Road Detections",
+                                         "mswidth": f["properties"].get("w"), "_bar": []},
+                          "geometry": {"type": "LineString", "coordinates": c}})
+
+    # cut the OSM edges where detected roads join them
+    out = []
+    for i, e in enumerate(edges):
+        if i not in splits:
+            out.append(e)
+            continue
+        g, p = geom[i], e["properties"]
+        cuts = sorted(splits[i])
+        bounds = [0.0] + [s for s, _ in cuts] + [g.length]
+        nodes = [p["from"]] + [n for _, n in cuts] + [p["to"]]
+        cum = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(np.asarray(g.coords), axis=0).T))])
+        for k in range(len(bounds) - 1):
+            piece = substring(g, bounds[k], bounds[k + 1])
+            c = to_ll(piece.coords)
+            bar = [(vi, kind) for vi, kind in p["_bar"] if bounds[k] - 0.5 <= cum[vi] <= bounds[k + 1] + 0.5]
+            out.append({"type": "Feature",
+                        "properties": {**p, "id": f"{p['id']}.{k}", "from": nodes[k], "to": nodes[k + 1],
+                                       "len": round(length_ll(c), 1), "_bar": bar},
+                        "geometry": {"type": "LineString", "coordinates": c}})
+    n_split = len(splits)
+    return out + det_edges, len(det_edges), n_split
+
+
+def main():
+    t0 = time.time()
+    edges = osm_edges()
+    edges, n_det, n_split = add_detected(edges)
+    for e in edges:
+        bar = e["properties"].pop("_bar")
+        if bar:
+            e["properties"]["barriers"] = sorted({kind for _, kind in bar})
     write_fc(AREA / "edges.geojson", edges)
     km = Counter()
     for e in edges:
         km[e["properties"]["highway"]] += e["properties"]["len"] / 1000
-    print(f"{len(ways)} ways -> {len(edges)} edges, {sum(km.values()):.0f} km, {time.time() - t0:.0f} s")
+    print(f"{len(edges)} edges, {sum(km.values()):.0f} km, {n_det} detected roads added, {n_split} OSM edges split "
+          f"to join them, {time.time() - t0:.0f} s")
     for k, v in km.most_common():
         print(f"  {k:16s} {v:8.0f} km")
     print(f"  edges with a barrier/ford: {sum(1 for e in edges if 'barriers' in e['properties'])}")

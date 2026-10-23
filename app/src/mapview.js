@@ -15,7 +15,8 @@ const APP_BASE = location.href.replace(/[?#].*$/, '').replace(/[^/]*$/, '');
 
 // Overlay switch -> the layers it shows.
 export const DS_OVERLAYS = {
-  'ds-tracks': ['ds-tracks-casing', ...DS_TRACK_LAYERS, 'ds-selected'],
+  'ds-tracks': ['ds-tracks-casing', 'ds-tracks', 'ds-tracks-dash', 'ds-tracks-dot', 'ds-selected'],
+  'ds-unmapped': ['ds-det-casing', 'ds-tracks-det'],
   'ds-detections': ['ds-detections'],
   'ds-routes': ['ds-routes'],
   'ds-contours': ['ds-contours', 'ds-contour-labels'],
@@ -189,14 +190,15 @@ export function applyLayers(map) {
   const usable = packUsable();
   for (const [id, layers] of Object.entries(DS_OVERLAYS)) {
     const o = ov[id] ?? { on: false, opacity: 1 };
-    const on = usable && (o.on || (topo && ['ds-tracks', 'ds-places', 'ds-pois', 'ds-contours'].includes(id)));
+    const on = usable && (o.on || (topo && ['ds-tracks', 'ds-unmapped', 'ds-places', 'ds-pois', 'ds-contours'].includes(id)));
     for (const l of layers) vis(map, l, on);
   }
   const color = trackColor(settings.colorBy);
-  for (const l of ['ds-tracks', 'ds-tracks-dash', 'ds-tracks-dot']) {
+  for (const l of DS_TRACK_LAYERS) {
     map.setPaintProperty(l, 'line-color', color);
-    map.setPaintProperty(l, 'line-opacity', ov['ds-tracks']?.opacity ?? 1);
+    map.setPaintProperty(l, 'line-opacity', (l === 'ds-tracks-det' ? ov['ds-unmapped'] : ov['ds-tracks'])?.opacity ?? 1);
   }
+  map.setPaintProperty('ds-det-casing', 'line-color', topo ? '#ffffff' : '#000000');
   map.setPaintProperty('ds-tracks-casing', 'line-color', topo ? '#ffffff' : '#000000');
   map.setPaintProperty('ds-tracks-casing', 'line-opacity', (topo ? 0.9 : 0.5) * (ov['ds-tracks']?.opacity ?? 1));
   map.setPaintProperty('ds-detections', 'line-opacity', ov['ds-detections']?.opacity ?? 0.85);

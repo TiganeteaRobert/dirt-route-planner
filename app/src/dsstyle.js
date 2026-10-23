@@ -8,6 +8,7 @@ export const COLOR_MODES = {
     note: 'Combines the map type, Microsoft detections, GPS traces, routes, hiking/MTB scales, steepness and forest. '
       + 'Tap a track to see why. Starting weights: tell me where it is wrong and they get tuned.' },
   type: { name: 'Track type', legend: [['#ff9800', 'track (darker = rougher grade)'], ['#ff4081', 'path / bridleway'],
+    ['#00e5ff', 'seen from above, not in OSM (unverified)'],
     ['#ea80fc', 'footway, cycleway, steps (no motors)'], ['#ffffff', 'minor road'], ['#ffd740', 'secondary'],
     ['#ffab40', 'primary'], ['#ff5252', 'trunk / motorway']] },
   det: { name: 'Seen from above (Microsoft)', legend: [['#9e9e9e', 'not detected'], ['#ffee58', 'partly'],
@@ -58,18 +59,19 @@ export function trackColor(mode) {
         ['motorway', 'trunk'], '#ff5252', 'primary', '#ffab40', 'secondary', '#ffd740', 'tertiary', '#ffffff',
         ['unclassified', 'residential', 'living_street', 'service', 'road', 'raceway'], '#eeeeee',
         'track', ['match', ['coalesce', ['get', 'tt'], 0], 1, '#ffd180', 2, '#ffb74d', 3, '#ff9800', 4, '#ef6c00', 5, '#bf360c', '#ff9800'],
-        ['path', 'bridleway'], '#ff4081',
+        ['path', 'bridleway'], '#ff4081', 'detected', '#00e5ff',
         ['footway', 'cycleway', 'steps', 'pedestrian'], '#ea80fc', '#cccccc'];
   }
 }
 
 const widthFactor = ['match', ['get', 'class'], ['motorway', 'trunk'], 1.6, 'primary', 1.45, 'secondary', 1.3,
-  ['tertiary', 'track'], 1.15, ['path', 'bridleway'], 1, ['footway', 'cycleway', 'steps', 'pedestrian'], 0.75, 1];
+  ['tertiary', 'track'], 1.15, ['path', 'bridleway', 'detected'], 1, ['footway', 'cycleway', 'steps', 'pedestrian'], 0.75, 1];
 const lineWidth = (k = 1) => ['interpolate', ['linear'], ['zoom'],
   10, ['*', 0.7 * k, widthFactor], 13, ['*', 1.8 * k, widthFactor], 15, ['*', 3 * k, widthFactor], 18, ['*', 7 * k, widthFactor]];
 
 const DOTTED = ['in', ['get', 'class'], ['literal', ['path', 'bridleway', 'footway', 'cycleway', 'steps', 'pedestrian']]];
 const DASHED = ['all', ['==', ['get', 'class'], 'track'], ['!', ['in', ['coalesce', ['get', 'tt'], 0], ['literal', [1, 2]]]]];
+const DETECTED = ['==', ['get', 'class'], 'detected'];
 
 // Layers under the raster bases (only visible with the DirtScout topo base).
 export function topoBaseLayers() {
@@ -104,10 +106,17 @@ export function overlayLayers() {
         'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2, 15, 6], 'line-opacity': 0.55 } },
     { id: 'ds-detections', type: 'line', source: 'ds', 'source-layer': 'detections', layout: { visibility: 'none' },
       paint: { 'line-color': '#00e5ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 16, 3], 'line-opacity': 0.85 } },
-    { id: 'ds-tracks-casing', type: 'line', source: 'ds', 'source-layer': 'tracks', minzoom: 10,
+    { id: 'ds-det-casing', type: 'line', source: 'ds', 'source-layer': 'tracks', minzoom: 12, filter: DETECTED,
+      layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#000000', 'line-opacity': 0.45, 'line-width': lineWidth(1.7) } },
+    { id: 'ds-tracks-det', type: 'line', source: 'ds', 'source-layer': 'tracks', minzoom: 12, filter: DETECTED,
+      layout: { visibility: 'none', 'line-join': 'round' },
+      paint: { 'line-color': trackColor('type'), 'line-width': lineWidth(), 'line-dasharray': [1.2, 1.3] } },
+    { id: 'ds-tracks-casing', type: 'line', source: 'ds', 'source-layer': 'tracks', minzoom: 10, filter: ['!', DETECTED],
       layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#000000', 'line-opacity': 0.5, 'line-width': lineWidth(1.9) } },
-    { id: 'ds-tracks', type: 'line', source: 'ds', 'source-layer': 'tracks', minzoom: 10, filter: ['all', ['!', DOTTED], ['!', DASHED]],
+    { id: 'ds-tracks', type: 'line', source: 'ds', 'source-layer': 'tracks', minzoom: 10,
+      filter: ['all', ['!', DOTTED], ['!', DASHED], ['!', DETECTED]],
       layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': trackColor('type'), 'line-width': lineWidth() } },
     { id: 'ds-tracks-dash', type: 'line', source: 'ds', 'source-layer': 'tracks', minzoom: 10, filter: DASHED,
@@ -201,4 +210,4 @@ export function addIcons(map) {
   }
 }
 
-export const DS_TRACK_LAYERS = ['ds-tracks', 'ds-tracks-dash', 'ds-tracks-dot'];
+export const DS_TRACK_LAYERS = ['ds-tracks', 'ds-tracks-dash', 'ds-tracks-dot', 'ds-tracks-det'];

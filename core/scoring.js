@@ -34,11 +34,12 @@ export function scoreEdge(p, extras = {}) {
   if (ROADS.has(cls)) { exists = 0.95; add('road', 'mapped as a public road', 0.95); }
   else if (MINOR.has(cls)) { exists = 0.6; add('minor', 'mapped as a minor road / street', 0.6); }
   else if (cls === 'track') { exists = 0.5; add('track', 'mapped as a track', 0.5); }
+  else if (cls === 'detected') { exists = 0.55; add('detected', 'seen from above by Microsoft in Bing imagery, not in OSM', 0.55); }
   else { exists = 0.35; add('path', `mapped as a ${cls ?? 'way'}`, 0.35); }
 
   if (p.src && /survey|gps|gnss/i.test(p.src)) { exists += 0.1; add('survey', 'mapped from a ground survey or GPS', 0.1); }
   if ((p.ver ?? 0) >= 3) { exists += 0.05; add('edits', `edited ${p.ver} times in OSM`, 0.05); }
-  if (p.det != null) {
+  if (p.det != null && cls !== 'detected') {
     if (p.det >= 0.7) { exists += 0.25; add('det', `seen from above along ${Math.round(p.det * 100)} % of it`, 0.25); }
     else if (p.det >= 0.3) { exists += 0.1; add('det', `seen from above along ${Math.round(p.det * 100)} % of it`, 0.1); }
   }
@@ -76,6 +77,7 @@ export function scoreEdge(p, extras = {}) {
   if (p.acc && BANNED.has(p.acc)) { legal = 'no'; add('access', `motor access "${p.acc}" in OSM`, 'legal'); }
   else if (p.acc && RESTRICTED.has(p.acc)) { legal = 'restricted'; add('access', `motor access "${p.acc}" in OSM`, 'legal'); }
   if (p.prot) add('protected', 'inside a protected area: check the rules', 'legal');
+  if (cls === 'detected') add('unknown', 'not in OSM: name, surface and access unknown', 'legal');
 
   // ---- class ----
   let cls3;

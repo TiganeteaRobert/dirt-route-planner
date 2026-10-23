@@ -76,7 +76,8 @@ class Layer:
 
 HW_MINZ = {"motorway": 8, "trunk": 8, "primary": 8, "secondary": 9, "tertiary": 10, "unclassified": 11, "track": 11,
            "residential": 12, "path": 12, "bridleway": 12, "living_street": 13, "service": 13, "road": 12,
-           "footway": 13, "cycleway": 13, "steps": 14, "pedestrian": 13, "construction": 13, "raceway": 12}
+           "footway": 13, "cycleway": 13, "steps": 14, "pedestrian": 13, "construction": 13, "raceway": 12,
+           "detected": 12}
 
 
 def motor_access(p):

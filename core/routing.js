@@ -3,9 +3,9 @@
 import { decodePolyline } from './polyline.js';
 
 export const CLASSES = ['track', 'path', 'bridleway', 'unclassified', 'residential', 'service', 'living_street', 'road',
-  'tertiary', 'secondary', 'primary', 'trunk'];
+  'tertiary', 'secondary', 'primary', 'trunk', 'detected'];
 // Cost factor by class: a dirt-bike ride prefers tracks over tarmac, and busy roads least of all.
-const CLASS_FACTOR = [0.8, 1.0, 1.0, 1.1, 1.3, 1.2, 1.4, 1.15, 1.5, 2.0, 2.8, 4.0];
+const CLASS_FACTOR = [0.8, 1.0, 1.0, 1.1, 1.3, 1.2, 1.4, 1.15, 1.5, 2.0, 2.8, 4.0, 0.9];
 const RISK_FACTOR = [1.0, 1.3, 4.0];
 const PAVED_FACTOR = [1.0, 1.8, 1.15];          // unpaved, paved, unknown (when preferring dirt)
 const R = 6371008.8;
