@@ -20,6 +20,7 @@ CACHE = RAW / "traces"
 CACHE.mkdir(parents=True, exist_ok=True)
 GRID = 0.1
 MAX_PAGES = 20
+MIN_CELL = 0.012           # degrees: busier cells smaller than this are not split again
 TRK = re.compile(r"<trk>(.*?)</trk>", re.S)
 PT = re.compile(r'<trkpt lat="([-\d.]+)" lon="([-\d.]+)"')
 URL_RE = re.compile(r"<url>[^<]*?/traces/(\d+)</url>")
@@ -93,6 +94,7 @@ def main():
     while queue:
         key, cell = queue.pop(0)
         texts = []
+        small = cell[2] - cell[0] < MIN_CELL        # a tiny cell this busy is a parked logger or a city centre
         try:
             for p in range(MAX_PAGES):
                 text = get_page(key, cell, p)
@@ -101,8 +103,15 @@ def main():
                 if text.count("<trkpt") < 5000:
                     break
             else:
-                raise TooDeep(f"{key}: more than {MAX_PAGES} pages")
+                if not small:
+                    raise TooDeep(f"{key}: more than {MAX_PAGES} pages")
+                print(f"  {key}: tiny and still full after {MAX_PAGES} pages - kept as is", flush=True)
         except TooDeep as ex:
+            if small and texts:
+                print(f"  {key}: {ex} - tiny cell, keeping {len(texts)} pages", flush=True)
+                got = sum(parse(tx, lon, lat, tid) for tx in texts)
+                done += 1
+                continue
             print(f"  split {key} ({ex})", flush=True)
             l, b, r, t = cell
             mx, my = (l + r) / 2, (b + t) / 2
