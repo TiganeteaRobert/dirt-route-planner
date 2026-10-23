@@ -11,14 +11,15 @@
     longer one, sure enough under forest, near villages and when short, at least 0.45 sure, not a shore), with their
     mean probability (conf) and land cover along them.
 -> data/ai/ai_lines.geojson (lon/lat). Private: derived from Esri imagery, never published as it is.
-    uv run --with numpy --with scipy --with shapely --with scikit-image --with pillow python pipeline/ai_vectorize.py [low=0.2] [high=0.4]
+    uv run --with numpy --with scipy --with shapely --with scikit-image --with pillow python pipeline/ai_vectorize.py [low=0.1] [high=0.22]
 Hysteresis thresholds on the ridge map (see ridge): a line starts where it reaches `high` and runs on while above `low`.
 """
 import json
 import math
+import os
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import numpy as np
 import shapely
@@ -26,20 +27,24 @@ from PIL import Image
 from scipy import ndimage
 from scipy.spatial import cKDTree
 
-from ai_common import AI, MPP, PRED, Z, lat2gy, lon2gx
+from ai_common import AI, MPP, PRED, TILES, Z, lat2gy, lon2gx
 from common import AREA, read_fc
 
 B = 4                 # patches per block side
 HALO = 1              # patches of context around a block
-SPUR = 15             # px: dead ends shorter than this off a junction are skeleton noise
+SPUR = 30             # px: dead ends shorter than this off a junction are skeleton noise (pruned in rounds)
 KNOWN = 15.0          # m: this close to an OSM highway or a Microsoft detection = already known
+MAX_CAL = 20000       # stretches on mapped dirt tracks used to set the keep thresholds
+CAL_Q = 0.15          # keep a line when it is as clear as the clearest 85 % of those (strength and lineness)
 PARALLEL = 25.0       # m: a new run this close to a known road along most of it is that road drawn off its place
 GAP = 25.0            # m: ends of new lines this close are joined when they point at each other
 GAP_ANY = 8.0         # m: ... and this close whatever their direction
 GAP_ANGLE = 40.0      # degrees
 MIN_LEN = 60.0        # m
 EDGE = 0.37           # block cuts lie at pixel k - EDGE, never on a vertex
-SIGMA = 1.0           # px: blur of the gap-filled probabilities, so a dashed band becomes one ridge
+SIGMA = 2.5           # px: blur of the gap-filled probabilities: a dashed, serrated band becomes one smooth ridge
+                      # (at 1 px its skeleton was a fishbone, cut into pieces too short to keep)
+MIN_SCORE = 0.3       # lines the model drew weaker than this are left out; the app's slider picks among the rest
 SMOOTH = 5            # points (every 4 px) averaged along the final lines: the skeleton zig-zags
 MAX_WIGGLE = 1.6      # length / end-to-end distance above which a short line is noise
 BARE = 60             # WorldCover bare ground (quarries, rock): the model traces their rims
@@ -119,6 +124,29 @@ def trace(skel):
     return chains, centre
 
 
+def pruned(sk, rounds=3):
+    """Traces the skeleton, removing dead-end spurs shorter than SPUR off junctions in a few rounds (each round can
+    expose new ones). Returns (chains, centre, degree of each node cluster)."""
+    from skimage.morphology import skeletonize
+    for r in range(rounds + 1):
+        chains, centre = trace(sk)
+        deg = np.zeros(len(centre), int)
+        for a, b, _ in chains:
+            deg[a] += 1
+            deg[b] += 1
+        spurs = [(a, b, path) for a, b, path in chains
+                 if len(path) < SPUR and min(deg[a], deg[b]) == 1 and max(deg[a], deg[b]) >= 3]
+        if not spurs or r == rounds:
+            return [c for c in chains if not any(c is x for x in spurs)] if r == rounds else chains, centre, deg
+        sk = sk.copy()
+        for a, b, path in spurs:
+            for y, x in path:
+                sk[y, x] = False
+            ey, ex = centre[a] if deg[a] == 1 else centre[b]          # the free end pixel
+            sk[int(round(ey)), int(round(ex))] = False
+        sk = skeletonize(sk)
+
+
 def block(job):
     bi, bj, ni, nj, thr = job
     mask = load_mask(bi, bj, ni, nj, thr)
@@ -128,18 +156,12 @@ def block(job):
     mask = ndimage.binary_closing(mask, structure=disk(2))
     mask = remove_small_objects(mask, max_size=60)
     mask = remove_small_holes(mask, max_size=150)          # a track drawn as two lines -> one
-    chains, centre = trace(skeletonize(mask))
-    deg = np.zeros(len(centre), int)
-    for a, b, _ in chains:
-        deg[a] += 1
-        deg[b] += 1
+    chains, centre, deg = pruned(skeletonize(mask))
     out = []
     ox, oy = bi * B * 512 - HALO * 512, bj * B * 512 - HALO * 512          # mosaic origin in the area's pixel grid
     x0, y0 = HALO * 512 + ox - EDGE, HALO * 512 + oy - EDGE
     x1, y1 = x0 + B * 512, y0 + B * 512
     for a, b, path in chains:
-        if len(path) < SPUR and min(deg[a], deg[b]) == 1 and max(deg[a], deg[b]) >= 3:
-            continue
         pts = [centre[a]] + path + [centre[b]]
         xy = np.array([(x + ox, y + oy) for y, x in pts], float)
         if len(xy) < 2 or np.hypot(*(xy[-1] - xy[0])) == 0 and len(xy) < 4:
@@ -172,20 +194,80 @@ def densify(xy, step):
     return np.column_stack([np.interp(s, cum, xy[:, 0]), np.interp(s, cum, xy[:, 1])])
 
 
+DIRT = {"track", "path", "bridleway"}
+
+
 def known_tree(X0, Y0):
     """Points every 3 m along every OSM highway and Microsoft detection, in pixel coordinates of the patch grid (pixel
-    k's centre at k, like the skeleton)."""
-    pts = []
+    k's centre at k, like the skeleton). Returns (tree, dirt): dirt marks the points of OSM tracks, paths, bridleways."""
+    pts, dirt = [], []
     for name in ("osm_highways.geojson", "ms_roads.geojson"):
         for f in read_fc(AREA / name):
             c = f["geometry"]["coordinates"]
             xy = np.array([(lon2gx(x) - X0 * 256 - 0.5, lat2gy(y) - Y0 * 256 - 0.5) for x, y, *_ in c])
-            pts.append(densify(xy, 3.0 / MPP))
-    return cKDTree(np.concatenate(pts))
+            d = densify(xy, 3.0 / MPP)
+            pts.append(d)
+            dirt.append(np.full(len(d), f["properties"].get("highway") in DIRT))
+    return cKDTree(np.concatenate(pts)), np.concatenate(dirt)
 
 
-def sample_pred(xy, X0, Y0):
-    """Probability (0-1) at each point, read patch by patch."""
+def tile_grey(x, y):
+    p = TILES / str(x) / f"{y}.jpg"
+    try:
+        return np.asarray(Image.open(p).convert("L"), np.float32) if p.exists() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def sample_grey(xy, X0, Y0):
+    """Grey level (0-255) of the imagery at points of the patch grid (NaN without imagery), tile by tile."""
+    gx = np.rint(xy[:, 0] + X0 * 256).astype(np.int64)
+    gy = np.rint(xy[:, 1] + Y0 * 256).astype(np.int64)
+    tx, ty = gx // 256, gy // 256
+    key = tx * 1_000_000 + ty
+    out = np.full(len(xy), np.nan, np.float32)
+    order = np.argsort(key, kind="stable")
+    groups = np.split(order, np.flatnonzero(np.diff(key[order])) + 1)
+
+    def fill(grp):
+        t = tile_grey(int(tx[grp[0]]), int(ty[grp[0]]))
+        if t is not None:
+            out[grp] = t[gy[grp] - ty[grp[0]] * 256, gx[grp] - tx[grp[0]] * 256]
+    with ThreadPoolExecutor(8) as ex:
+        list(ex.map(fill, groups))
+    return out
+
+
+def line_features(pts, X0, Y0):
+    """Per line (points every 2 px): strength = mean over its points of the strongest raw prediction within 2 px (how
+    clearly the model drew it), and lineness = median over its points of |centre - sides| - |left - right| / 2 in the
+    imagery, sides ~4.5 m out: a track differs from the ground on both sides, a field or terrace edge is a step."""
+    allp = np.concatenate(pts)
+    lid = np.repeat(np.arange(len(pts)), [len(p) for p in pts])
+    cnt = np.bincount(lid, minlength=len(pts))
+    strength = np.bincount(lid, sample_pred(allp, X0, Y0, peak=True), minlength=len(pts)) / cnt
+    nrm = np.zeros_like(allp)
+    for k, p in enumerate(pts):                                  # unit normals from central differences
+        t = np.gradient(p, axis=0) if len(p) > 1 else np.array([[1.0, 0.0]])
+        t /= np.maximum(1e-9, np.hypot(*t.T))[:, None]
+        nrm[lid == k] = np.column_stack([-t[:, 1], t[:, 0]]) if len(p) > 1 else 0
+    g = {o: sample_grey(allp + o * nrm, X0, Y0) for o in (-6, -5, -1, 0, 1, 5, 6)}
+    centre = (g[-1] + g[0] + g[1]) / 3
+    left, right = (g[-6] + g[-5]) / 2, (g[5] + g[6]) / 2
+    pt = np.abs(centre - (left + right) / 2) - np.abs(left - right) / 2
+    lineness = np.full(len(pts), np.nan)
+    order = np.argsort(lid, kind="stable")
+    for k, grp in enumerate(np.split(order, np.cumsum(cnt)[:-1])):
+        v = pt[grp]
+        v = v[np.isfinite(v)]
+        if len(v):
+            lineness[k] = np.median(v)
+    return strength, lineness, allp, lid, cnt
+
+
+def sample_pred(xy, X0, Y0, peak=False):
+    """Probability (0-1) at each point, read patch by patch: of the ridge map (see ridge), or with peak the strongest
+    raw prediction within 2 px."""
     ix, iy = np.rint(xy[:, 0]).astype(int), np.rint(xy[:, 1]).astype(int)
     pi, pj = ix // 512, iy // 512
     key = pi * 100000 + pj
@@ -198,7 +280,8 @@ def sample_pred(xy, X0, Y0):
         p = PRED / f"{i}_{j}.png"
         if not p.exists():
             continue
-        a = ridge(np.asarray(Image.open(p)))                                     # as in load_mask
+        a = np.asarray(Image.open(p))
+        a = ndimage.maximum_filter(a, size=5) if peak else ridge(a)
         out[grp] = a[iy[grp] - j * 512, ix[grp] - i * 512] / 255.0
     return out
 
@@ -235,13 +318,17 @@ def run(jobs, X0, Y0, out_path):
     print(f"skeleton: {len(merged)} lines, {km_all:.0f} km ({time.time() - t0:.0f} s)", flush=True)
 
     # drop what maps already have
-    tree = known_tree(X0, Y0)
+    tree, dirt = known_tree(X0, Y0)
     step, near = 4.0, KNOWN / MPP
-    runs = []
-    for g in merged:
+    runs, cal = [], []            # cal: stretches the model drew on mapped dirt tracks - the yardstick for its lines
+    for gi, g in enumerate(merged):
         xy = densify(np.asarray(g.coords), step)
-        d, _ = tree.query(xy, distance_upper_bound=near)
+        d, idx = tree.query(xy, distance_upper_bound=near)
         new = ~np.isfinite(d)
+        if gi % 5 == 0 and len(cal) < MAX_CAL:
+            on = np.isfinite(d) & dirt[np.minimum(idx, len(dirt) - 1)]
+            e2 = np.flatnonzero(np.diff(np.concatenate([[0], on.astype(int), [0]])))
+            cal += [xy[a:b] for a, b in zip(e2[::2], e2[1::2]) if (b - a) * step * MPP >= MIN_LEN]
         if not new.any():
             continue
         edges = np.flatnonzero(np.diff(np.concatenate([[0], new.astype(int), [0]])))
@@ -287,42 +374,43 @@ def run(jobs, X0, Y0, out_path):
     print(f"{len(links)} gaps joined; {len(lines)} lines of {MIN_LEN:.0f} m or more ({n0 - len(lines)} short wiggly ones "
           f"dropped, {time.time() - t0:.0f} s)", flush=True)
 
-    # confidence and land cover along each line
+    # how clearly each line is drawn and how much it looks like a track, against the mapped dirt tracks
     pts = [densify(np.asarray(g.coords), 2.0) for g in lines]
-    allp = np.concatenate(pts)
-    lid = np.repeat(np.arange(len(pts)), [len(p) for p in pts])
-    prob = sample_pred(allp, X0, Y0)
+    conf, lineness, allp, lid, cnt = line_features(pts, X0, Y0)
+    cs, cl, *_ = line_features([densify(r, 2.0) for r in cal], X0, Y0) if cal else (np.array([0.5]), np.array([0.0]))
+    t_conf, t_line = float(np.quantile(cs, CAL_Q)), float(np.nanquantile(cl, CAL_Q))
+    print(f"calibration on {len(cal)} stretches of mapped dirt tracks: keep strength >= {t_conf:.2f}, lineness >= "
+          f"{t_line:.1f} (their medians {np.median(cs):.2f}, {np.nanmedian(cl):.1f}; new lines {np.median(conf):.2f}, "
+          f"{np.nanmedian(lineness):.1f})", flush=True)
     lc = landcover_sampler(X0, Y0)(allp)
     village = np.bincount(lid, landcover_sampler(X0, Y0, (50, VILLAGE))(allp).astype(float), minlength=len(pts))
     shore = np.bincount(lid, landcover_sampler(X0, Y0, (80, WATER))(allp).astype(float), minlength=len(pts))
-    cnt = np.bincount(lid, minlength=len(pts))
-    conf = np.bincount(lid, prob, minlength=len(pts)) / cnt
     share = {name: np.bincount(lid, (lc == code).astype(float), minlength=len(pts)) / cnt
              for name, code in (("tree", 10), ("grass", 30), ("crop", 40), ("built", 50), ("bare", BARE))}
     n = 2 ** Z * 256
     feats = []
     near = cKDTree(allp)
     kept = np.zeros(len(lines), bool)
-    n_twin = n_forest = n_village = n_short = n_shore = 0
+    n_twin = n_weak = n_shore = 0
+    debug = []
     for k in sorted(range(len(lines)), key=lambda k: -lines[k].length):          # longest first
         g = lines[k]
+        why = None
         if share["built"][k] > 0.5 or share["bare"][k] > 0.5:
-            continue
-        if share["tree"][k] > 0.6 and conf[k] < FOREST_CONF:
-            n_forest += 1
-            continue
-        if village[k] / cnt[k] > 0.5 and conf[k] < VILLAGE_CONF:
-            n_village += 1
-            continue
-        if g.length * MPP < SHORT and conf[k] < SHORT_CONF or conf[k] < MIN_CONF:
-            n_short += 1
-            continue
-        if shore[k] / cnt[k] > 0.5:
+            why = "built/bare"
+        elif conf[k] < MIN_SCORE or g.length * MPP < SHORT and conf[k] < (MIN_SCORE + 1) / 2:
+            why = "weak"
+            n_weak += 1
+        elif shore[k] / cnt[k] > 0.5:
+            why = "shore"
             n_shore += 1
+        if why:
+            debug.append((k, why))
             continue
         nb = near.query_ball_point(pts[k], TWIN / MPP)
         if np.mean([kept[lid[i]].any() if i else False for i in nb]) > 0.6:
             n_twin += 1
+            debug.append((k, "twin"))
             continue
         kept[k] = True
         xy = np.asarray(shapely.simplify(g, 0.8).coords)
@@ -330,19 +418,31 @@ def run(jobs, X0, Y0, out_path):
         lat = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * (xy[:, 1] + Y0 * 256 + 0.5) / n))))
         feats.append({"type": "Feature",
                       "properties": {"id": f"a{len(feats)}", "len": round(g.length * MPP), "conf": round(float(conf[k]), 2),
+                                     "line": round(float(lineness[k]), 1),
                                      **{name: round(float(v[k]), 2) for name, v in share.items()}},
                       "geometry": {"type": "LineString", "coordinates": [[round(x, 6), round(y, 6)] for x, y in zip(lon, lat)]}})
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump({"type": "FeatureCollection", "features": feats}, fh)
     km = sum(f["properties"]["len"] for f in feats) / 1000
-    print(f"dropped {n_twin} twins, {n_forest} unsure forest lines, {n_village} unsure village lines, {n_short} unsure "
-          f"(short or below {MIN_CONF}) and {n_shore} shores")
+    print(f"dropped {n_weak} weak (below {MIN_SCORE}, or short and below {(MIN_SCORE + 1) / 2:.2f}), {n_shore} shores "
+          f"and {n_twin} twins")
+    if os.environ.get("DS_AI_DEBUG"):                           # every candidate with why it went, for review renders
+        dfe = []
+        for k, why in debug:
+            xy = np.asarray(lines[k].coords)
+            lon = (xy[:, 0] + X0 * 256 + 0.5) / n * 360 - 180
+            lat = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * (xy[:, 1] + Y0 * 256 + 0.5) / n))))
+            dfe.append({"type": "Feature", "properties": {"why": why, "conf": round(float(conf[k]), 2),
+                                                          "line": round(float(lineness[k]), 1) if np.isfinite(lineness[k]) else None},
+                        "geometry": {"type": "LineString", "coordinates": [[round(x, 6), round(y, 6)] for x, y in zip(lon, lat)]}})
+        with open(out_path.with_name(out_path.stem + "_dropped.geojson"), "w", encoding="utf-8") as fh:
+            json.dump({"type": "FeatureCollection", "features": dfe}, fh)
     print(f"{out_path.name}: {len(feats)} lines, {km:.0f} km (skeleton {km_all:.0f} km, new {km_new:.0f} km), "
           f"{time.time() - t0:.0f} s")
 
 
 def main():
-    thr = (float(sys.argv[1]) if len(sys.argv) > 1 else 0.2, float(sys.argv[2]) if len(sys.argv) > 2 else 0.4)
+    thr = (float(sys.argv[1]) if len(sys.argv) > 1 else 0.1, float(sys.argv[2]) if len(sys.argv) > 2 else 0.22)
     print(f"hysteresis thresholds on the ridge map: {thr}", flush=True)
     meta = json.loads((AI / "grid.json").read_text())
     X0, Y0, ni, nj = meta["X0"], meta["Y0"], meta["ni"], meta["nj"]

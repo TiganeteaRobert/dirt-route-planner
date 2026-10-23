@@ -19,6 +19,22 @@ function project(p, a, b) {
 const lineLen = (c) => c.slice(1).reduce((s, p, i) => s + haversine(c[i][0], c[i][1], p[0], p[1]), 0);
 
 /**
+ * The AI bundle's graph with only the AI-found edges the model is at least `min` (0-1) sure of (column aic = 100 x its
+ * confidence); every other edge stays. Returns the input itself when nothing is left out.
+ */
+export function filterAiEdges(json, min) {
+  const ai = json.classes.indexOf('ai');
+  const aic = json.edges.aic;
+  if (ai < 0 || !aic) return json;
+  const keep = [];
+  for (let e = 0; e < json.edges.cls.length; e++) if (json.edges.cls[e] !== ai || aic[e] >= min * 100 - 1e-9) keep.push(e);
+  if (keep.length === json.edges.cls.length) return json;
+  const pick = (arr) => keep.map((e) => arr[e]);
+  return { ...json, edges: Object.fromEntries(Object.entries(json.edges).map(([k, v]) => [k, pick(v)])),
+    ids: pick(json.ids), names: pick(json.names), geom: pick(json.geom) };
+}
+
+/**
  * json: the graph JSON; roads: [{id, name, coords: [[lon, lat]...], g, gdir, up, dn}].
  * Returns a new JSON object (the input is not changed) and how each road joined: [{id, start, end}] with
  * 'node' | 'split' | 'free'.

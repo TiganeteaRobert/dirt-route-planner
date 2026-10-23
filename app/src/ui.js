@@ -3,7 +3,7 @@ import { SOURCES, LOCAL_OVERLAYS, SLOPE_CLASSES, OFFLINE_SOURCES, APP_NAME, DS_B
 import { settings, saveSettings, defaultArea } from './settings.js';
 import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw, setAi } from './mapview.js';
 import { unlock as aiUnlock, update as aiUpdate, removeStored as aiRemove } from './aibundle.js';
-import { augmentGraph } from '../../core/usergraph.js';
+import { augmentGraph, filterAiEdges } from '../../core/usergraph.js';
 import { buildIndex, investigate } from '../../core/investigate.js';
 import { COLOR_MODES, DS_TRACK_LAYERS } from './dsstyle.js';
 import { scoreEdge } from '../../core/scoring.js';
@@ -175,6 +175,7 @@ async function renderLayers() {
           oninput: (e) => { o.opacity = +e.target.value; applyLayers(app.map); }, onchange: () => saveSettings(),
         })) : null,
       id === 'ds-tracks' && o.on ? colorByControl() : null,
+      id === 'ds-ai' && o.on ? aiSlider() : null,
     ));
   }
 
@@ -208,6 +209,39 @@ async function renderLayers() {
   }
   out.push(h('p', { class: 'note' }, 'Coming with the area pack: DirtScout track map from OSM data, Microsoft road detections, routes coloured by risk.'));
   return out;
+}
+
+// How many AI-found tracks (and km) the model is at least `min` sure of.
+function aiShown(min) {
+  let n = 0, m = 0;
+  for (const f of app.ai?.ai?.features ?? []) {
+    if ((f.properties.aic ?? 0) >= min - 1e-9) { n++; m += f.properties.len ?? 0; }
+  }
+  return { n, km: m / 1000 };
+}
+
+// The AI layer's sensitivity: tracks the model drew less clearly than this are hidden and left out of routes.
+function aiSlider() {
+  const text = (min) => {
+    const s = aiShown(min);
+    return [`At least ${Math.round(min * 100)} % sure`, `${fmtInt(s.n)} tracks, ${fmtInt(s.km)} km shown. Lower catches more tracks, `
+      + 'and more field edges, forest edges and other lines that are not tracks.'];
+  };
+  const [a, b] = text(settings.aiMin);
+  const label = h('span', {}, a);
+  const note = h('p', { class: 'note' }, b);
+  return h('div', { class: 'indent' },
+    h('label', { class: 'slider' }, label,
+      h('input', {
+        type: 'range', min: 0.3, max: 0.95, step: 0.05, value: settings.aiMin, id: 'ai-min',
+        oninput: (e) => {
+          settings.aiMin = +e.target.value;
+          applyLayers(app.map);
+          [label.textContent, note.textContent] = text(settings.aiMin);
+        },
+        onchange: () => { saveSettings(); app.graph = null; app.graphIndex = null; },      // routes follow on next use
+      })),
+    note);
 }
 
 function colorByControl() {
@@ -326,7 +360,7 @@ const aiRouting = () => !!app.ai?.graph && settings.overlays['ds-ai']?.on !== fa
 
 async function ensureGraph() {
   if (!app.graph) {
-    const json = aiRouting() ? app.ai.graph : await loadGraphJson();
+    const json = aiRouting() ? filterAiEdges(app.ai.graph, settings.aiMin ?? 0.5) : await loadGraphJson();
     if (!json) throw new Error('the route network is not on this phone: install the area pack (Offline) or go online');
     const roads = app.tracks.filter((t) => t.network).flatMap((t) => trackLines(t).map((coords, k) => ({
       id: `${t.id}#${k}`, name: t.name, coords: coords.map((c) => [c[0], c[1]]),
@@ -897,7 +931,8 @@ function aiCard() {
     return h('div', { class: 'card', id: 'ai-card' },
       h('div', { class: 'row' }, h('strong', { class: 'grow' }, 'AI-found tracks'), h('span', { class: 'badge ok' }, `unlocked ${d.version}`)),
       h('p', { class: 'note' }, `${fmtInt(d.stats?.lines ?? d.ai?.features?.length ?? 0)} tracks, ${fmtInt(d.stats?.km ?? 0)} km that no map has, `
-        + 'joined to the route network (Plan and Investigate use them while their layer is on). Kept on this phone; works offline.'),
+        + 'joined to the route network (Plan and Investigate use the ones shown). Choose how sure the AI must be in Layers. '
+        + 'Kept on this phone; works offline.'),
       progress, err,
       aiJob ? null : h('div', { class: 'row-btns' }, btn('Update', () => runAi(null)), btn('Remove', removeAi)));
   }

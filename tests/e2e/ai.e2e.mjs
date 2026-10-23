@@ -37,6 +37,27 @@ const check = (ok, msg) => { if (!ok) throw new Error(`FAILED: ${msg}`); console
 const line = bundleData().ai.features[0].geometry.coordinates;
 const VIEW = { center: [(line[0][0] + line[1][0]) / 2, (line[0][1] + line[1][1]) / 2], zoom: 16 };
 
+// AI tracks drawn after the sensitivity filter (unique ids: a line crossing tile edges comes back once per tile)
+async function aiShown() {
+  return page.evaluate(() => new Set(window.dirtscout.map.queryRenderedFeatures({ layers: ['ds-tracks-ai'] })
+    .map((f) => f.properties.id)).size);
+}
+async function aiEdges() {
+  return page.evaluate(async () => {
+    const G = await window.dirtscout.debug.ensureGraph();
+    let n = 0;
+    for (let e = 0; e < G.M; e++) if (G.classes[G.e.cls[e]] === 'ai') n++;
+    return n;
+  });
+}
+async function setAiMin(v) {
+  await page.locator('#toolbar [data-sheet="layers"]').click();
+  await page.locator('#ai-min').waitFor({ timeout: 10000 });
+  await page.locator('#ai-min').fill(String(v));
+  await page.locator('#sheet-close').click();
+  await settle(800);
+}
+
 async function aiFeatures() {
   // unique ids: a line crossing tile edges comes back once per tile
   return page.evaluate(() => new Set(window.dirtscout.map.querySourceFeatures('ai').map((f) => f.properties.id)).size);
@@ -75,8 +96,14 @@ try {
   await page.evaluate((v) => window.dirtscout.map.jumpTo(v), VIEW);
   await page.waitForFunction(() => window.dirtscout.map.loaded(), null, { timeout: 30000 });
   await settle(1500);
-  check((await aiFeatures()) === 2, 'both AI tracks are on the map');
+  check((await aiFeatures()) === 2, 'both AI tracks are in the layer');
   check(await page.evaluate(() => window.dirtscout.map.getLayoutProperty('ds-tracks-ai', 'visibility') === 'visible'), 'the AI layer is visible');
+  check((await aiShown()) === 1, 'at the default 50 % only the track the AI is 82 % sure of shows');
+  await setAiMin(0.3);
+  check((await aiShown()) === 2 && (await aiEdges()) === 2, 'slider at 30 %: both tracks shown and routed on');
+  await setAiMin(0.9);
+  check((await aiShown()) === 0 && (await aiEdges()) === 0, 'slider at 90 %: none shown or routed on');
+  await setAiMin(0.3);
   await shot('ai-tracks-on-map');
 
   // tap one: the track card
@@ -95,12 +122,7 @@ try {
   await page.locator('#sheet-close').click();
 
   // the route network includes the AI edges while the layer is on, and not when it is off
-  const withAi = await page.evaluate(async () => {
-    const G = await window.dirtscout.debug.ensureGraph();
-    let n = 0;
-    for (let e = 0; e < G.M; e++) if (G.classes[G.e.cls[e]] === 'ai') n++;
-    return n;
-  });
+  const withAi = await aiEdges();
   check(withAi === 2, `routing uses the AI edges (${withAi})`);
   await page.locator('#toolbar [data-sheet="layers"]').click();
   const row = page.locator('label.row', { hasText: 'Tracks the AI found' });

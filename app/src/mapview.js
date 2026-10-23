@@ -62,7 +62,8 @@ function buildStyle() {
     layers.push({ id, type: 'raster', source: id, layout: { visibility: 'none' } });
   }
   layers.push(...overlayLayers());
-  sources.ai = { type: 'geojson', data: EMPTY_FC };
+  // the AI layer can hold tens of thousands of lines: tile them only up to z15 and simplify a little more (phones)
+  sources.ai = { type: 'geojson', data: EMPTY_FC, maxzoom: 15, tolerance: 0.5 };
   layers.push(...aiLayers());
   sources.area = { type: 'geojson', data: areaFeature(settings.area) };
   layers.push({
@@ -215,6 +216,8 @@ export function applyLayers(map) {
   }
   map.setPaintProperty('ds-det-casing', 'line-color', topo ? '#ffffff' : '#000000');
   map.setPaintProperty('ds-ai-casing', 'line-color', topo ? '#ffffff' : '#000000');
+  const aiFilter = ['>=', ['coalesce', ['get', 'aic'], 0], settings.aiMin ?? 0.5];
+  for (const l of ['ds-ai-casing', 'ds-tracks-ai']) map.setFilter(l, aiFilter);
   map.setPaintProperty('ds-tracks-casing', 'line-color', topo ? '#ffffff' : '#000000');
   map.setPaintProperty('ds-tracks-casing', 'line-opacity', (topo ? 0.9 : 0.5) * (ov['ds-tracks']?.opacity ?? 1));
   map.setPaintProperty('ds-detections', 'line-opacity', ov['ds-detections']?.opacity ?? 0.85);

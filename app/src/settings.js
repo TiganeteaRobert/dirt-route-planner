@@ -24,6 +24,7 @@ const DEFAULTS = {
     'ds-protected': { on: false, opacity: 1 },
   },
   colorBy: 'risk',            // how the DirtScout tracks are coloured (see dsstyle.js COLOR_MODES)
+  aiMin: 0.5,                 // AI-found tracks: show and route on those the model is at least this sure of (0.3-0.95)
   units: 'metric',
   bingHost: 'tiles',          // 'tiles' = tiles.virtualearth.net, 'ecn' = ecn.t0-3.tiles.virtualearth.net
   saveBrowse: false,          // also store tiles seen while browsing online

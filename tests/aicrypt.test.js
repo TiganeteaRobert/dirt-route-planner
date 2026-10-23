@@ -19,3 +19,18 @@ test('a wrong passphrase or a foreign file is refused', async () => {
   await assert.rejects(decryptBundle(buf, 'nope'), WrongPassphrase);
   await assert.rejects(decryptBundle(new Uint8Array(100), TEST_PASS), /not a DirtScout AI file/);
 });
+
+test('the AI sensitivity drops only the AI edges the model is less sure of', async () => {
+  const { filterAiEdges } = await import('../core/usergraph.js');
+  const { data } = await decryptBundle(makeBundle(), TEST_PASS);
+  const g = data.graph;
+  const aiCount = (json) => json.edges.cls.filter((c) => json.classes[c] === 'ai').length;
+  assert.equal(aiCount(filterAiEdges(g, 0.3)), 2);
+  assert.equal(aiCount(filterAiEdges(g, 0.5)), 1);
+  assert.equal(aiCount(filterAiEdges(g, 0.9)), 0);
+  const f = filterAiEdges(g, 0.9);
+  assert.equal(f.edges.a.length, 2);
+  assert.equal(f.ids.length, 2);
+  assert.equal(f.geom.length, 2);
+  assert.equal(filterAiEdges(g, 0.3), g);                  // nothing left out: the same object
+});
