@@ -1,6 +1,8 @@
 // A small AI bundle in the pipeline/ai_bundle.py format, for tests: a tiny graph near Marisel with two 'ai' edges and
-// their map features, encrypted with a test passphrase (never the owner's).
+// their map tiles (ai_tiles.pmtiles, made by make_ai_tiles.py from the same lines), encrypted with a test passphrase
+// (never the owner's).
 import { createCipheriv, pbkdf2Sync, randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { encodePolyline } from '../../core/polyline.js';
 import { normPass } from '../../core/aicrypt.js';
@@ -27,24 +29,28 @@ export function bundleData() {
     nodes: { lon: NODES.map((n) => Math.round(n[0] * 1e6)), lat: NODES.map((n) => Math.round(n[1] * 1e6)) },
     edges: cols, ids: EDGES.map((e, i) => e.id ?? `w${i}:0`), names: EDGES.map(() => ''), geom: geom.map((c) => encodePolyline(c)),
   };
-  const ai = {
-    type: 'FeatureCollection',
-    features: EDGES.map((e, i) => ({ e, i })).filter(({ e }) => e.cls === 13).map(({ e, i }) => ({
-      type: 'Feature',
-      properties: { class: 'ai', id: e.id, len: e.len, det: 0, tp: 0, tn: 0, tree: 0.1, g100: 9, up: 12, dn: 3,
-        src: 'DirtScout AI (Esri imagery)', aic: e.aic / 100, crop: 0, grass: 0.9, ex: e.ex, risk: e.risk, lvl: 0 },
-      geometry: { type: 'LineString', coordinates: geom[i] },
-    })),
-  };
-  return { v: 1, version: '2026-10-23.test01', built: 1792780000, base: null, stats: { lines: 2, km: 0.5 }, graph, ai };
+  const ai = EDGES.filter((e) => e.cls === 13);
+  const hist = Array.from({ length: 14 }, (_, k) => {
+    const t = Math.round((0.3 + 0.05 * k) * 100) / 100;
+    const s = ai.filter((e) => e.aic / 100 >= t - 1e-9);
+    return [t, s.length, Math.round(s.reduce((m, e) => m + e.len, 0) / 1000)];
+  });
+  const meta = { v: 2, version: '2026-10-23.test01', built: 1792780000, base: null, stats: { lines: 2, km: 1 }, hist };
+  return { meta, graph, line: geom[2] };
 }
 
 // The encrypted file as bytes (iterations kept low: the count travels in the header).
 export function makeBundle(pass = TEST_PASS, iterations = 2000) {
+  const { meta, graph } = bundleData();
+  const m = Buffer.from(JSON.stringify(meta)), g = gzipSync(Buffer.from(JSON.stringify(graph)));
+  const t = readFileSync(new URL('./ai_tiles.pmtiles', import.meta.url));
+  const lens = Buffer.alloc(12);
+  lens.writeUInt32BE(m.length, 0); lens.writeUInt32BE(g.length, 4); lens.writeUInt32BE(t.length, 8);
+  const plain = Buffer.concat([Buffer.from('DSB2'), lens, m, g, t]);
   const salt = randomBytes(16), iv = randomBytes(12);
   const key = pbkdf2Sync(normPass(pass), salt, iterations, 32, 'sha256');
   const c = createCipheriv('aes-256-gcm', key, iv);
-  const body = Buffer.concat([c.update(gzipSync(Buffer.from(JSON.stringify(bundleData())))), c.final(), c.getAuthTag()]);
+  const body = Buffer.concat([c.update(plain), c.final(), c.getAuthTag()]);
   const it = Buffer.alloc(4);
   it.writeUInt32BE(iterations);
   return Buffer.concat([Buffer.from('DSAI'), Buffer.from([1]), salt, iv, it, body]);

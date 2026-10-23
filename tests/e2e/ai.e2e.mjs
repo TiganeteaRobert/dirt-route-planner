@@ -34,7 +34,7 @@ const shot = async (name) => {
 };
 const settle = (ms = 800) => page.waitForTimeout(ms);
 const check = (ok, msg) => { if (!ok) throw new Error(`FAILED: ${msg}`); console.log(`ok - ${msg}`); };
-const line = bundleData().ai.features[0].geometry.coordinates;
+const { line } = bundleData();
 const VIEW = { center: [(line[0][0] + line[1][0]) / 2, (line[0][1] + line[1][1]) / 2], zoom: 16 };
 
 // AI tracks drawn after the sensitivity filter (unique ids: a line crossing tile edges comes back once per tile)
@@ -60,7 +60,7 @@ async function setAiMin(v) {
 
 async function aiFeatures() {
   // unique ids: a line crossing tile edges comes back once per tile
-  return page.evaluate(() => new Set(window.dirtscout.map.querySourceFeatures('ai').map((f) => f.properties.id)).size);
+  return page.evaluate(() => new Set(window.dirtscout.map.querySourceFeatures('ai', { sourceLayer: 'ai' }).map((f) => f.properties.id)).size);
 }
 
 try {
@@ -98,7 +98,8 @@ try {
   await settle(1500);
   check((await aiFeatures()) === 2, 'both AI tracks are in the layer');
   check(await page.evaluate(() => window.dirtscout.map.getLayoutProperty('ds-tracks-ai', 'visibility') === 'visible'), 'the AI layer is visible');
-  check((await aiShown()) === 1, 'at the default 50 % only the track the AI is 82 % sure of shows');
+  await setAiMin(0.5);
+  check((await aiShown()) === 1, 'slider at 50 %: only the track scoring 82 % shows');
   await setAiMin(0.3);
   check((await aiShown()) === 2 && (await aiEdges()) === 2, 'slider at 30 %: both tracks shown and routed on');
   await setAiMin(0.9);
@@ -116,7 +117,7 @@ try {
   await page.mouse.click(pt.x, pt.y);
   await page.locator('#sheet-body', { hasText: 'Track the AI found' }).waitFor({ timeout: 10000 });
   const card = await page.locator('#sheet-body').innerText();
-  check(card.includes('AI confidence') && card.includes('82 %'), 'the card shows the AI confidence');
+  check(card.includes('AI score') && card.includes('82 %'), 'the card shows the AI score');
   check(/DirtScout's own AI found this line/.test(card), 'the card explains where it comes from');
   await shot('ai-track-card');
   await page.locator('#sheet-close').click();
@@ -144,10 +145,22 @@ try {
   await page.waitForFunction(() => window.dirtscout?.map?.loaded(), null, { timeout: 60000 });
   await page.evaluate((v) => window.dirtscout.map.jumpTo(v), VIEW);
   await settle(1500);
-  check(await page.evaluate(() => window.dirtscout.ai?.version === '2026-10-23.test01'), 'offline after a reload: still unlocked');
+  check(await page.evaluate(() => window.dirtscout.ai?.meta?.version === '2026-10-23.test01'), 'offline after a reload: still unlocked');
   check((await aiFeatures()) === 2, 'offline after a reload: the AI tracks are drawn');
   await shot('offline-reload');
   await context.setOffline(false);
+
+  // a phone that unlocked the first (GeoJSON) format: the stored record has no format; the app fetches the new one
+  // with the saved passphrase by itself
+  await page.evaluate(async (pass) => {
+    const db = window.dirtscout.debug.db;
+    for (const k of ['ai-tiles', 'ai-graph']) await db.del('packs', k);
+    await db.put('packs', { blob: new Blob(['{}']), version: '2026-10-23.old', bytes: 2, saved: Date.now(), pass }, 'ai');
+  }, TEST_PASS.toLowerCase().replace(/\s+/g, ''));
+  await page.reload();
+  await page.waitForFunction(() => window.dirtscout?.ai?.meta?.version === '2026-10-23.test01', null, { timeout: 60000 });
+  check(await page.evaluate(async () => (await window.dirtscout.debug.db.get('packs', 'ai')).format === 2),
+    'an AI file in the old format is replaced by the new one on its own');
 
   const bad = errors.filter((e) => !/Failed to load resource|ERR_INTERNET_DISCONNECTED|net::/.test(e));
   check(bad.length === 0, `no page errors${bad.length ? `: ${bad.join(' | ')}` : ''}`);

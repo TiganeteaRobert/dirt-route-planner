@@ -132,14 +132,16 @@ export function overlayLayers() {
   return layers;
 }
 
-// The owner's private AI-found tracks (source 'ai', a GeoJSON from the unlocked ai.enc; app/src/aibundle.js).
+// The owner's private AI-found tracks: vector tiles (layer "ai", z12-14) from the unlocked ai.enc, source 'ai'
+// (pmtiles://ai, app/src/aibundle.js). Added to the map only once unlocked (mapview.setAiTiles).
 export function aiLayers() {
+  const src = { source: 'ai', 'source-layer': 'ai' };
   return [
-    { id: 'ds-ai-casing', type: 'line', source: 'ai', minzoom: 11, layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+    { id: 'ds-ai-casing', type: 'line', ...src, minzoom: 12, layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#000000', 'line-opacity': 0.45, 'line-width': lineWidth(1.7) } },
-    { id: 'ds-tracks-ai', type: 'line', source: 'ai', minzoom: 11, layout: { visibility: 'none', 'line-join': 'round' },
+    { id: 'ds-tracks-ai', type: 'line', ...src, minzoom: 12, layout: { visibility: 'none', 'line-join': 'round' },
       paint: { 'line-color': trackColor('type'), 'line-width': lineWidth(), 'line-dasharray': [2.4, 1] } },
-    { id: 'ds-ai-selected', type: 'line', source: 'ai', filter: ['==', ['get', 'id'], '__none__'],
+    { id: 'ds-ai-selected', type: 'line', ...src, filter: ['==', ['get', 'id'], '__none__'],
       layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#00b0ff', 'line-width': lineWidth(2.6), 'line-opacity': 0.75 } },
   ];

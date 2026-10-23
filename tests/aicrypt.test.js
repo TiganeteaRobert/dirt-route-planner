@@ -1,16 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decryptBundle, WrongPassphrase } from '../core/aicrypt.js';
+import { decryptBundle, gunzipJson, WrongPassphrase } from '../core/aicrypt.js';
 import { makeBundle, TEST_PASS } from './fixtures/aibundle.mjs';
 import { loadGraph } from '../core/routing.js';
 
 test('the AI bundle opens with its passphrase, whatever the case and spaces', async () => {
   const buf = makeBundle();
-  const { data } = await decryptBundle(buf, `  ${TEST_PASS.toUpperCase()} `);
-  assert.equal(data.v, 1);
-  assert.equal(data.ai.features.length, 2);
-  assert.equal(data.graph.classes[13], 'ai');
-  const G = loadGraph(data.graph);
+  const { meta, graphGz, tiles } = await decryptBundle(buf, `  ${TEST_PASS.toUpperCase()} `);
+  assert.equal(meta.v, 2);
+  assert.equal(meta.stats.lines, 2);
+  assert.equal(String.fromCharCode(...tiles.subarray(0, 7)), 'PMTiles');
+  const graph = await gunzipJson(graphGz);
+  assert.equal(graph.classes[13], 'ai');
+  const G = loadGraph(graph);
   assert.equal(G.classes[G.e.cls[2]], 'ai');
 });
 
@@ -22,8 +24,7 @@ test('a wrong passphrase or a foreign file is refused', async () => {
 
 test('the AI sensitivity drops only the AI edges the model is less sure of', async () => {
   const { filterAiEdges } = await import('../core/usergraph.js');
-  const { data } = await decryptBundle(makeBundle(), TEST_PASS);
-  const g = data.graph;
+  const g = await gunzipJson((await decryptBundle(makeBundle(), TEST_PASS)).graphGz);
   const aiCount = (json) => json.edges.cls.filter((c) => json.classes[c] === 'ai').length;
   assert.equal(aiCount(filterAiEdges(g, 0.3)), 2);
   assert.equal(aiCount(filterAiEdges(g, 0.5)), 1);

@@ -121,3 +121,19 @@ export async function loadPackJson(name) {
 }
 
 export const loadGraphJson = () => loadPackJson('graph');
+
+// Vector tiles kept on the phone as a Blob (the owner's AI tracks) under pmtiles://<name>.
+class BlobSource {
+  constructor(name, blob) { this.name = name; this.blob = blob; }
+  getKey() { return this.name; }
+  async getBytes(offset, length) { return { data: await this.blob.slice(offset, offset + length).arrayBuffer() }; }
+}
+
+export function addBlobTiles(name, blob) {
+  protocol.tiles.delete(name);
+  protocol.add(new PMTiles(new BlobSource(name, blob)));
+}
+
+export function removeBlobTiles(name) {
+  protocol.tiles.delete(name);
+}

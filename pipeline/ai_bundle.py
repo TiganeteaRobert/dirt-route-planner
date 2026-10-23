@@ -1,14 +1,18 @@
-"""AI step 6: the owner's private bundle for the phone -> data/ai/ai.enc (and a copy in app/public/pack/ for local
-tests): the private routing graph (graph.py ... graph_pack.py run with DS_AI=1) and the AI-found tracks with their
-evidence and scores (the map layer and the track card), gzipped and encrypted with AES-256-GCM under a key derived
-from a passphrase (PBKDF2-SHA256). The lines are derived from Esri imagery, so the file may sit next to the public
-pack only encrypted. The passphrase is private/ai_passphrase.txt (made on the first run); the owner types it into the
-app once. Publishing: pipeline/README.md.
-Format: b"DSAI" | 1 | salt (16) | iv (12) | PBKDF2 iterations (u32, big-endian) | ciphertext + tag.
-    uv run --with cryptography python pipeline/ai_bundle.py
+"""AI step 7: the owner's private bundle for the phone -> data/ai/ai.enc (and a copy in app/public/pack/ for local
+tests). The lines are derived from Esri imagery, so the file may sit next to the public pack only encrypted
+(AES-256-GCM, key from a passphrase by PBKDF2-SHA256; the passphrase is private/ai_passphrase.txt, made on the first
+run, typed into the app once).
+File: b"DSAI" | 1 | salt (16) | iv (12) | PBKDF2 iterations (u32 BE) | ciphertext + tag.
+Plaintext (version 2): b"DSB2" | three u32 BE lengths | meta.json | graph.json.gz | tiles.pmtiles
+  meta     {v: 2, version, built, base, stats: {lines, km}, hist: [[score from, lines, km], ...]}
+  graph    the private routing graph (graph.py ... graph_pack.py run with DS_AI=1), loaded by the app only to route
+  tiles    the AI-found tracks as vector tiles z12-14, layer "ai" (the map draws pre-cut tiles: as one GeoJSON the
+           ~50k lines took the phone's map seconds to redraw at every move)
+    uv run --with cryptography --with numpy --with shapely --with mapbox-vector-tile --with pmtiles python pipeline/ai_bundle.py
 """
 import gzip
 import hashlib
+import io
 import json
 import secrets
 import shutil
@@ -17,12 +21,15 @@ import time
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from common import AREA, ROOT, read_fc
+from build_tiles import Layer, to_geom, write_pmtiles
+from common import AREA, BBOX, ROOT, bbox_buffer, read_fc
 
 AI = ROOT / "data" / "ai"
 PASS = ROOT / "private" / "ai_passphrase.txt"
 ITERATIONS = 600_000
 ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"          # no l, o, 0, 1: easy to type on a phone
+ZMIN, ZMAX = 12, 14
+HIST = [round(0.3 + 0.05 * k, 2) for k in range(14)]   # slider steps 0.30 ... 0.95
 
 
 def passphrase():
@@ -43,46 +50,53 @@ def encrypt(data, pw):
     return b"DSAI" + bytes([1]) + salt + iv + struct.pack(">I", ITERATIONS) + AESGCM(key).encrypt(iv, data, None)
 
 
-def ai_features():
-    """The AI edges as the map layer wants them (the same properties as the pack's tracks layer)."""
+def ai_layer():
+    """The AI edges as the map layer wants them (the properties of the pack's tracks layer, plus the AI's own)."""
     scores = json.loads((AI / "edge_scores.json").read_text())
-    feats = []
+    L = Layer("ai", "line")
     for f in read_fc(AI / "edges_evidence.geojson"):
         p = f["properties"]
         if p["highway"] != "ai":
             continue
         sc = scores.get(p["id"])
-        props = {"class": "ai", "id": p["id"], "len": p["len"], "det": p.get("det"), "tp": p.get("tp"), "tn": p.get("tn"),
-                 "tree": p.get("tree"), "g50": p.get("g50"), "g100": p.get("g100"), "gall": p.get("gall"),
-                 "gdir": p.get("gdir"), "up": p.get("up"), "dn": p.get("dn"), "prot": 1 if p.get("prot") else None,
-                 "src": p.get("source"), "aic": p.get("aic"), "crop": p.get("aicrop"), "grass": p.get("aigrass"),
-                 "ex": sc[0] if sc else None, "risk": sc[1] if sc else None, "lvl": sc[2] if sc else None,
-                 "leg": (sc[3] or None) if sc else None}
-        feats.append({"type": "Feature", "properties": {k: v for k, v in props.items() if v is not None},
-                      "geometry": {"type": "LineString",
-                                   "coordinates": [[round(x, 6), round(y, 6)] for x, y, *_ in f["geometry"]["coordinates"]]}})
-    return feats
+        L.add(to_geom(f["geometry"]), {
+            "class": "ai", "id": p["id"], "len": p["len"], "aic": p.get("aic"), "conf": p.get("aiconf"),
+            "line": p.get("ailine"), "det": p.get("det"), "tp": p.get("tp"), "tn": p.get("tn"), "tree": p.get("tree"),
+            "g50": p.get("g50"), "g100": p.get("g100"), "gall": p.get("gall"), "gdir": p.get("gdir"), "up": p.get("up"),
+            "dn": p.get("dn"), "prot": 1 if p.get("prot") else None, "crop": p.get("aicrop"), "grass": p.get("aigrass"),
+            "ex": sc[0] if sc else None, "risk": sc[1] if sc else None, "lvl": sc[2] if sc else None,
+            "leg": (sc[3] or None) if sc else None}, ZMIN)
+    return L.finish()
 
 
 def main():
     t0 = time.time()
-    graph = json.loads((AI / "graph.json").read_text())
-    feats = ai_features()
-    km = sum(f["properties"]["len"] for f in feats) / 1000
+    graph_text = (AI / "graph.json").read_text()
+    L = ai_layer()
+    aic = [p.get("aic") or 0 for p in L.props]
+    lens = [p["len"] for p in L.props]
+    hist = [[t, sum(1 for a in aic if a >= t - 1e-9), round(sum(m for a, m in zip(aic, lens) if a >= t - 1e-9) / 1000)]
+            for t in HIST]
+    tiles = io.BytesIO()
+    sizes, _, n_tiles = write_pmtiles([L], tiles, ZMIN, ZMAX, bbox_buffer(BBOX, 1000), "DirtScout AI tracks (private)",
+                                      "Derived from Esri World Imagery: private, personal use only", t0=t0)
+    tiles = tiles.getvalue()
+    graph_gz = gzip.compress(graph_text.encode(), 9, mtime=0)
+    digest = hashlib.sha256(graph_gz + tiles).hexdigest()[:6]
     base = json.loads((AREA / "pack.json").read_text())["version"] if (AREA / "pack.json").exists() else None
-    body = {"graph": graph, "ai": {"type": "FeatureCollection", "features": feats}}
-    digest = hashlib.sha256(json.dumps(body, separators=(",", ":")).encode()).hexdigest()[:6]
-    payload = {"v": 1, "version": time.strftime("%Y-%m-%d") + "." + digest, "built": int(time.time()), "base": base,
-               "stats": {"lines": len(feats), "km": round(km)}, **body}
-    raw = json.dumps(payload, separators=(",", ":")).encode()
-    blob = encrypt(gzip.compress(raw, 9), passphrase())
+    meta = {"v": 2, "version": time.strftime("%Y-%m-%d") + "." + digest, "built": int(time.time()), "base": base,
+            "stats": {"lines": len(L.props), "km": round(sum(lens) / 1000)}, "hist": hist}
+    meta_b = json.dumps(meta, separators=(",", ":")).encode()
+    plain = b"DSB2" + struct.pack(">III", len(meta_b), len(graph_gz), len(tiles)) + meta_b + graph_gz + tiles
+    blob = encrypt(plain, passphrase())
     out = AI / "ai.enc"
     out.write_bytes(blob)
     dest = ROOT / "app" / "public" / "pack"
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copy2(out, dest / out.name)
-    print(f"ai.enc {payload['version']}: {len(feats)} AI tracks, {km:.0f} km; {len(raw) / 1e6:.1f} MB json -> "
-          f"{len(blob) / 1e6:.1f} MB encrypted ({time.time() - t0:.0f} s). Passphrase: {PASS}")
+    print(f"ai.enc {meta['version']}: {meta['stats']['lines']} AI tracks, {meta['stats']['km']} km; graph "
+          f"{len(graph_gz) / 1e6:.1f} MB gz, tiles {len(tiles) / 1e6:.1f} MB ({n_tiles} tiles) -> {len(blob) / 1e6:.1f} MB "
+          f"encrypted ({time.time() - t0:.0f} s). Passphrase: {PASS}")
 
 
 if __name__ == "__main__":

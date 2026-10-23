@@ -18,8 +18,11 @@ and the research live in `private/HANDOFF.md` (gitignored). Read it before start
 - `data/` (raw downloads, area pack) and `private/` are gitignored.
 - AI-found tracks (pipeline/README.md, steps A1-A7): a U-Net on Esri z17 imagery, 3-fold cross-fitting, line extraction,
   a private graph (`DS_AI=1`), all in `data/ai/`. The phone gets them only as `pack/ai.enc` (AES-GCM, passphrase in
-  `private/ai_passphrase.txt`), opened in Offline > "Tracks the AI found" (`app/src/aibundle.js`, `core/aicrypt.js`).
-  `tests/e2e/ai.e2e.mjs` checks it with a test bundle (`tests/fixtures/aibundle.mjs`).
+  `private/ai_passphrase.txt`), opened in Offline > "Tracks the AI found" (`app/src/aibundle.js`, `core/aicrypt.js`):
+  vector tiles for the map (pmtiles://ai, added once unlocked), the graph read only when routing; a slider under the
+  layer in Layers sets the minimum score (default 0.4). `tests/e2e/ai.e2e.mjs` checks it with a test bundle
+  (`tests/fixtures/aibundle.mjs`, tiles from `make_ai_tiles.py`). A GeoJSON of ~50k lines made the map redraw take ~20 s:
+  keep big line sets in tiles.
 
 ## Rules (binding unless the owner changes them)
 - Microsoft (Bing) and Esri imagery: the owner accepted the terms risk for personal use. Downloads stay inside the riding

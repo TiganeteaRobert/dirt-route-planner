@@ -62,9 +62,6 @@ function buildStyle() {
     layers.push({ id, type: 'raster', source: id, layout: { visibility: 'none' } });
   }
   layers.push(...overlayLayers());
-  // the AI layer can hold tens of thousands of lines: tile them only up to z15 and simplify a little more (phones)
-  sources.ai = { type: 'geojson', data: EMPTY_FC, maxzoom: 15, tolerance: 0.5 };
-  layers.push(...aiLayers());
   sources.area = { type: 'geojson', data: areaFeature(settings.area) };
   layers.push({
     id: 'area', type: 'line', source: 'area',
@@ -210,14 +207,17 @@ export function applyLayers(map) {
   }
   const color = trackColor(settings.colorBy);
   for (const l of DS_TRACK_LAYERS) {
+    if (!map.getLayer(l)) continue;                                  // the AI layer exists only when unlocked
     map.setPaintProperty(l, 'line-color', color);
     const o = l === 'ds-tracks-det' ? ov['ds-unmapped'] : l === 'ds-tracks-ai' ? ov['ds-ai'] : ov['ds-tracks'];
     map.setPaintProperty(l, 'line-opacity', o?.opacity ?? 1);
   }
   map.setPaintProperty('ds-det-casing', 'line-color', topo ? '#ffffff' : '#000000');
-  map.setPaintProperty('ds-ai-casing', 'line-color', topo ? '#ffffff' : '#000000');
-  const aiFilter = ['>=', ['coalesce', ['get', 'aic'], 0], settings.aiMin ?? 0.5];
-  for (const l of ['ds-ai-casing', 'ds-tracks-ai']) map.setFilter(l, aiFilter);
+  if (map.getLayer('ds-ai-casing')) {
+    map.setPaintProperty('ds-ai-casing', 'line-color', topo ? '#ffffff' : '#000000');
+    const aiFilter = ['>=', ['coalesce', ['get', 'aic'], 0], settings.aiMin ?? 0.4];
+    for (const l of ['ds-ai-casing', 'ds-tracks-ai']) map.setFilter(l, aiFilter);
+  }
   map.setPaintProperty('ds-tracks-casing', 'line-color', topo ? '#ffffff' : '#000000');
   map.setPaintProperty('ds-tracks-casing', 'line-opacity', (topo ? 0.9 : 0.5) * (ov['ds-tracks']?.opacity ?? 1));
   map.setPaintProperty('ds-detections', 'line-opacity', ov['ds-detections']?.opacity ?? 0.85);
@@ -246,12 +246,17 @@ export function setPlan(map, fc) {
 
 export function setSelected(map, id) {
   map.setFilter('ds-selected', ['==', ['get', 'id'], id ?? '__none__']);
-  map.setFilter('ds-ai-selected', ['==', ['get', 'id'], id ?? '__none__']);
+  if (map.getLayer('ds-ai-selected')) map.setFilter('ds-ai-selected', ['==', ['get', 'id'], id ?? '__none__']);
 }
 
-// The AI-found tracks of the unlocked bundle (a FeatureCollection), or none.
-export function setAi(map, fc) {
-  map.getSource('ai')?.setData(fc ?? EMPTY_FC);
+// Adds (or removes) the AI-found tracks: source pmtiles://ai (registered by pack.addBlobTiles) and its layers, under
+// the riding-area outline. Re-adding after an update drops the old tiles from the map's cache.
+export function setAiTiles(map, on) {
+  for (const l of aiLayers()) if (map.getLayer(l.id)) map.removeLayer(l.id);
+  if (map.getSource('ai')) map.removeSource('ai');
+  if (!on) return;
+  map.addSource('ai', { type: 'vector', url: 'pmtiles://ai' });
+  for (const l of aiLayers()) map.addLayer(l, 'area');
 }
 
 export function setArea(map, bbox) {

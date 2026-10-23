@@ -88,7 +88,8 @@ def detected_props(k, f):
 
 def ai_props(k, f):
     p = f["properties"]
-    return {"id": f"ai{k}", "way": None, "highway": "ai", "source": "DirtScout AI (Esri imagery)", "aic": p.get("conf"),
+    return {"id": f"ai{k}", "way": None, "highway": "ai", "source": "DirtScout AI (Esri imagery)",
+            "aic": p.get("score", p.get("conf")), "aiconf": p.get("conf"), "ailine": p.get("line"),
             "aicrop": p.get("crop"), "aigrass": p.get("grass")}
 
 
@@ -99,7 +100,7 @@ def add_lines(edges, det, make_props):
     geom = [shapely.linestrings(to_m(e["geometry"]["coordinates"])) for e in edges]
     tree = shapely.STRtree(geom)
     splits = defaultdict(list)              # OSM edge index -> [(position along it, node id)]
-    ends = []                               # (point, node id) of free detected ends, for joining them
+    ends = defaultdict(list)                # free ends of added lines by 12 m grid cell: [(point, node id)]
     new_id = itertools.count(-1, -1)
 
     def snap(pt):
@@ -117,11 +118,15 @@ def add_lines(edges, det, make_props):
             nid = next(new_id)
             splits[i].append((s, nid))
             return nid, g.interpolate(s)
-        for q, nid in ends:
-            if q.distance(pt) <= SNAP_END:
-                return nid, q
+        cx, cy = int(pt.x // SNAP_END), int(pt.y // SNAP_END)     # a grid, not a scan of every end so far (n^2)
+        near = [(q.distance(pt), q, nid) for gx in (cx - 1, cx, cx + 1) for gy in (cy - 1, cy, cy + 1)
+                for q, nid in ends[(gx, gy)]]
+        near = [x for x in near if x[0] <= SNAP_END]
+        if near:
+            _, q, nid = min(near, key=lambda x: x[0])
+            return nid, q
         nid = next(new_id)
-        ends.append((pt, nid))
+        ends[(cx, cy)].append((pt, nid))
         return nid, None
 
     det_edges = []
@@ -149,7 +154,10 @@ def add_lines(edges, det, make_props):
         for k in range(len(bounds) - 1):
             piece = substring(g, bounds[k], bounds[k + 1])
             c = to_ll(piece.coords)
-            bar = [(vi, kind) for vi, kind in p["_bar"] if bounds[k] - 0.5 <= cum[vi] <= bounds[k + 1] + 0.5]
+            pc = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(np.asarray(piece.coords), axis=0).T))]) + bounds[k]
+            # barriers by their place along the edge, renumbered to the piece's own vertices (it may be split again)
+            bar = [(int(np.argmin(np.abs(pc - cum[vi]))), kind) for vi, kind in p["_bar"]
+                   if bounds[k] - 0.5 <= cum[vi] <= bounds[k + 1] + 0.5]
             out.append({"type": "Feature",
                         "properties": {**p, "id": f"{p['id']}.{k}", "from": nodes[k], "to": nodes[k + 1],
                                        "len": round(length_ll(c), 1), "_bar": bar},
@@ -164,7 +172,9 @@ def main():
     det = read_fc(AREA / "ms_not_in_osm.geojson") if (AREA / "ms_not_in_osm.geojson").exists() else []
     edges, n_det, n_split = add_lines(edges, det, detected_props)
     if os.environ.get("DS_AI"):
-        edges, n_ai, n_split_ai = add_lines(edges, read_fc(EDGES / "ai_lines.geojson"), ai_props)
+        # lines under the app slider's floor (0.3) could never be shown or routed on: left out
+        ai = [f for f in read_fc(EDGES / "ai_lines.geojson") if (f["properties"].get("score") or 0) >= 0.3]
+        edges, n_ai, n_split_ai = add_lines(edges, ai, ai_props)
         print(f"AI tracks: {n_ai} added, {n_split_ai} edges split to join them")
     for e in edges:
         bar = e["properties"].pop("_bar")

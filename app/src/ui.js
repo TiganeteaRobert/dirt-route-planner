@@ -1,13 +1,13 @@
 // Panels (one bottom sheet at a time), the toolbar, status pills and toasts.
 import { SOURCES, LOCAL_OVERLAYS, SLOPE_CLASSES, OFFLINE_SOURCES, APP_NAME, DS_BASE, DS_OVERLAY_LIST } from './config.js';
 import { settings, saveSettings, defaultArea } from './settings.js';
-import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw, setAi } from './mapview.js';
-import { unlock as aiUnlock, update as aiUpdate, removeStored as aiRemove } from './aibundle.js';
+import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw, setAiTiles } from './mapview.js';
+import { unlock as aiUnlock, update as aiUpdate, removeStored as aiRemove, loadAiGraph } from './aibundle.js';
 import { augmentGraph, filterAiEdges } from '../../core/usergraph.js';
 import { buildIndex, investigate } from '../../core/investigate.js';
 import { COLOR_MODES, DS_TRACK_LAYERS } from './dsstyle.js';
 import { scoreEdge } from '../../core/scoring.js';
-import { installed as packInstalled, fetchManifest, install as installPack, uninstall as uninstallPack, loadGraphJson, loadPackJson, PACK_FILES } from './pack.js';
+import { installed as packInstalled, fetchManifest, install as installPack, uninstall as uninstallPack, loadGraphJson, loadPackJson, PACK_FILES, addBlobTiles, removeBlobTiles } from './pack.js';
 import { decodePolyline } from '../../core/polyline.js';
 import { loadGraph, nearestNode, generateRoutes, routeCoords, haversine } from '../../core/routing.js';
 import { densify } from '../../core/geo.js';
@@ -159,7 +159,7 @@ async function renderLayers() {
       : 'Install the area pack (Offline) to see the DirtScout map with no network.'));
   }
   for (const [id, name, sliderLabel] of DS_OVERLAY_LIST) {
-    if (id === 'ds-ai' && !app.ai) continue;
+    if (id === 'ds-ai' && !app.ai?.meta) continue;
     const o = settings.overlays[id];
     out.push(h('div', { class: 'block' },
       h('label', { class: `row${packUsable() || id === 'ds-ai' ? '' : ' dim'}` },
@@ -211,21 +211,18 @@ async function renderLayers() {
   return out;
 }
 
-// How many AI-found tracks (and km) the model is at least `min` sure of.
+// How many AI-found tracks (and km) score at least `min` (the bundle's table, in the slider's steps).
 function aiShown(min) {
-  let n = 0, m = 0;
-  for (const f of app.ai?.ai?.features ?? []) {
-    if ((f.properties.aic ?? 0) >= min - 1e-9) { n++; m += f.properties.len ?? 0; }
-  }
-  return { n, km: m / 1000 };
+  const row = (app.ai?.meta?.hist ?? []).find((r) => Math.abs(r[0] - min) < 1e-6);
+  return { n: row?.[1] ?? 0, km: row?.[2] ?? 0 };
 }
 
 // The AI layer's sensitivity: tracks the model drew less clearly than this are hidden and left out of routes.
 function aiSlider() {
   const text = (min) => {
     const s = aiShown(min);
-    return [`At least ${Math.round(min * 100)} % sure`, `${fmtInt(s.n)} tracks, ${fmtInt(s.km)} km shown. Lower catches more tracks, `
-      + 'and more field edges, forest edges and other lines that are not tracks.'];
+    return [`AI score at least ${Math.round(min * 100)} %`, `${fmtInt(s.n)} tracks, ${fmtInt(s.km)} km shown. Lower catches more tracks, `
+      + 'and more field edges, forest edges and other lines that are not tracks; 40 % showed about 4 in 5 real tracks in a test.'];
   };
   const [a, b] = text(settings.aiMin);
   const label = h('span', {}, a);
@@ -287,7 +284,7 @@ function renderInfo() {
     kv('Ref', p.ref), kv('Surface', p.surf), kv('Smoothness', p.smooth), kv('Hiking scale', SAC[p.sac] ?? p.sac),
     kv('MTB scale', p.mtb), kv('Trail visibility', p.vis), kv('4WD only', p.fwd), kv('Motor access', p.acc ?? 'not tagged'),
     kv('Gates / barriers on it', p.bar), kv('Ford', p.ford ? 'yes' : null), kv('Bridge', p.bridge ? 'yes' : null),
-    p.class === 'ai' ? kv('AI confidence', p.aic != null ? `${Math.round(p.aic * 100)} %` : null) : null,
+    p.class === 'ai' ? kv('AI score', p.aic != null ? `${Math.round(p.aic * 100)} % (how clearly the AI saw it, and how much it looks like a track rather than a field or forest edge)` : null) : null,
     p.class === 'ai' ? kv('Land along it', [p.grass ? `${Math.round(p.grass * 100)} % grassland` : null,
       p.crop ? `${Math.round(p.crop * 100)} % fields` : null].filter(Boolean).join(', ')) : null,
   ];
@@ -356,11 +353,12 @@ const RISK_COLORS = ['#00e676', '#ffd600', '#ff1744'];
 const UNMAPPED = '#e040fb';
 
 // The unlocked AI bundle carries a whole route network with its tracks: use it while its layer is on.
-const aiRouting = () => !!app.ai?.graph && settings.overlays['ds-ai']?.on !== false;
+const aiRouting = () => !!app.ai?.meta && settings.overlays['ds-ai']?.on !== false;
 
 async function ensureGraph() {
   if (!app.graph) {
-    const json = aiRouting() ? filterAiEdges(app.ai.graph, settings.aiMin ?? 0.5) : await loadGraphJson();
+    const aiGraph = aiRouting() ? await loadAiGraph() : null;
+    const json = aiGraph ? filterAiEdges(aiGraph, settings.aiMin ?? 0.4) : await loadGraphJson();
     if (!json) throw new Error('the route network is not on this phone: install the area pack (Offline) or go online');
     const roads = app.tracks.filter((t) => t.network).flatMap((t) => trackLines(t).map((coords, k) => ({
       id: `${t.id}#${k}`, name: t.name, coords: coords.map((c) => [c[0], c[1]]),
@@ -921,12 +919,18 @@ let aiPass = '';
 
 // The owner's private layer: tracks DirtScout's model found in satellite imagery (pack/ai.enc, opened with a passphrase).
 function aiCard() {
-  const d = app.ai;
+  const d = app.ai?.meta;
   const progress = aiJob ? [
     h('div', { class: 'bar' }, h('div', { style: `width:${aiJob.total ? Math.floor((100 * aiJob.got) / aiJob.total) : 5}%` })),
     h('p', { class: 'note' }, aiJob.got && aiJob.got === aiJob.total ? 'Opening…' : `Downloading ${fmtBytes(aiJob.got)}${aiJob.total ? ` of ${fmtBytes(aiJob.total)}` : ''}`),
   ] : null;
   const err = aiError ? h('p', { class: 'note warn' }, aiError) : null;
+  if (app.ai?.stale) {
+    return h('div', { class: 'card', id: 'ai-card' },
+      h('p', { class: 'note' }, 'Your AI tracks need a one-time update to the new format (smoother map). It downloads with your saved passphrase.'),
+      progress, err,
+      aiJob ? null : h('div', { class: 'row-btns' }, btn('Update', () => runAi(null), 'primary'), btn('Remove', removeAi)));
+  }
   if (d) {
     return h('div', { class: 'card', id: 'ai-card' },
       h('div', { class: 'row' }, h('strong', { class: 'grow' }, 'AI-found tracks'), h('span', { class: 'badge ok' }, `unlocked ${d.version}`)),
@@ -948,6 +952,11 @@ function aiCard() {
     aiJob ? null : h('div', { class: 'row-btns' }, btn('Unlock', () => runAi(aiPass), 'primary')));
 }
 
+// After start-up: an AI file stored in an older format is fetched again in the new one (online only).
+export function refreshAi() {
+  if (navigator.onLine !== false) runAi(null);
+}
+
 async function runAi(pass) {
   if (aiJob) return;
   if (pass != null && !pass.trim()) { aiError = 'Type the passphrase first.'; rerender(); return; }
@@ -963,11 +972,12 @@ async function runAi(pass) {
   try {
     app.ai = pass == null ? await aiUpdate(onProgress) : await aiUnlock(pass, onProgress);
     aiPass = '';
-    setAi(app.map, app.ai.ai);
+    addBlobTiles('ai', app.ai.tiles);
+    setAiTiles(app.map, true);
     app.graph = null;
     app.graphIndex = null;
     applyLayers(app.map);
-    toast(`AI tracks ${app.ai.version}: ${fmtInt(app.ai.stats?.km ?? 0)} km on the map and in your routes.`);
+    toast(`AI tracks ${app.ai.meta.version}: ${fmtInt(app.ai.meta.stats?.km ?? 0)} km on the map and in your routes.`);
   } catch (e) {
     aiError = `Could not open it: ${e.message}.`;
   } finally {
@@ -980,7 +990,8 @@ async function removeAi() {
   if (!confirm('Remove the AI-found tracks from this phone? You can unlock them again with the passphrase.')) return;
   await aiRemove();
   app.ai = null;
-  setAi(app.map, null);
+  setAiTiles(app.map, false);
+  removeBlobTiles('ai');
   app.graph = null;
   app.graphIndex = null;
   applyLayers(app.map);

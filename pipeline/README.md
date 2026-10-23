@@ -65,9 +65,9 @@ segmentation-models-pytorch 0.5.0); set `TORCH_HOME` to a folder on E: so the Im
 | A2 | `ai_labels.py` | labels/ (known lines + ignore band + tree cover per 512 px patch), grid.json |
 | A3 | `ai_train.py <fold>` | model_f0-2.pt: cross-fitting, each model never trains on its own fold (~6.5 km blocks) |
 | A4 | `ai_infer.py [fold]` | pred/ (probability per patch; each fold predicted by its own model) |
-| A5 | `ai_vectorize.py` | ai_lines.geojson (skeleton lines not within 15 m of a known road, 60 m or longer) |
+| A5 | `ai_vectorize.py` | ai_lines.geojson: lines not within 15 m of a known road, each with a score (model strength x how track-like the imagery is across it); traced pieces cached in pieces_*.npz |
 | A6 | `DS_AI=1` graph.py, evidence.py, score.mjs, graph_pack.py | edges / evidence / scores / graph.json with class `ai` |
-| A7 | `ai_bundle.py` | ai.enc (gzip + AES-256-GCM, PBKDF2 key) and a copy in app/public/pack/ |
+| A7 | `ai_bundle.py` | ai.enc (AES-256-GCM, PBKDF2 key): meta, the gzipped graph, the lines as vector tiles z12-14; a copy in app/public/pack/ |
 
 ```
 cd pipeline
@@ -77,14 +77,18 @@ uv run --with numpy --with pillow --with shapely python ai_labels.py
 ../.venv-ml/Scripts/python ai_train.py 1
 ../.venv-ml/Scripts/python ai_train.py 2
 ../.venv-ml/Scripts/python ai_infer.py
-uv run --with numpy --with scipy --with shapely --with scikit-image --with pillow python ai_vectorize.py
+uv run --with numpy --with scipy --with shapely --with scikit-image --with pillow python ai_vectorize.py   # DS_AI_DEBUG=1: dropped lines too
 DS_AI=1 uv run python graph.py
 DS_AI=1 uv run --with numpy --with scipy --with shapely python evidence.py
 DS_AI=1 node score.mjs
 DS_AI=1 uv run python graph_pack.py
-uv run --with cryptography python ai_bundle.py
+uv run --with cryptography --with numpy --with shapely --with mapbox-vector-tile --with pmtiles python ai_bundle.py
 gh release upload pack-<version> ../data/ai/ai.enc --clobber     # then re-run the Pages workflow
 ```
+
+The score was set on hand-labelled lines (2026-10-24): at the app's default (0.4) about 4 in 5 shown lines were real
+tracks on a fresh sample, below it mostly field and forest edges. Re-runs that only change steps after the tracing
+read the cached pieces (minutes instead of ~15); delete pieces_*.npz after a new inference.
 
 The bundle carries a whole routing graph, so it keeps working when the public pack changes; rebuild it (A6-A7) with
 each new pack so both use the same OSM data, and upload it to the newest `pack-*` release (the workflow serves `*.enc`).

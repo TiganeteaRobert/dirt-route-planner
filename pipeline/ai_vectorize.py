@@ -5,7 +5,7 @@
  2. the parts within 15 m of an OSM highway or a Microsoft detection are known roads and go; new runs keep one point
     on each side so they reach towards the road they leave; runs within 25 m of a known road along 70 % of their
     length are that road mapped a little off its place, and go too;
- 3. ends of new lines within 25 m of each other that point at each other are joined (within 8 m in any case): a
+ 3. ends of new lines that point at each other are joined across gaps up to 50 m (8 m whatever their direction): a
     track under a tree, a faint bit the model missed;
  4. lines of 60 m and more stay (not wiggly when short, not mostly on buildings or bare ground, not a twin of a
     longer one, sure enough under forest, near villages and when short, at least 0.45 sure, not a shore), with their
@@ -34,21 +34,71 @@ B = 4                 # patches per block side
 HALO = 1              # patches of context around a block
 SPUR = 30             # px: dead ends shorter than this off a junction are skeleton noise (pruned in rounds)
 KNOWN = 15.0          # m: this close to an OSM highway or a Microsoft detection = already known
-MAX_CAL = 20000       # stretches on mapped dirt tracks used to set the keep thresholds
+MAX_CAL = 5000        # stretches on mapped dirt tracks measured for comparison (printed)
 CAL_Q = 0.15          # keep a line when it is as clear as the clearest 85 % of those (strength and lineness)
 PARALLEL = 25.0       # m: a new run this close to a known road along most of it is that road drawn off its place
-GAP = 25.0            # m: ends of new lines this close are joined when they point at each other
-GAP_ANY = 8.0         # m: ... and this close whatever their direction
-GAP_ANGLE = 40.0      # degrees
+# ends of new lines are joined (a track under a tree, a faint stretch) when this close: (metres, the most both ends
+# may point away from each other in degrees). A tree over a track left a 36 m gap in a test meadow.
+GAPS = ((8.0, 180.0), (25.0, 40.0), (50.0, 30.0))
+GAP = max(g for g, _ in GAPS)
 MIN_LEN = 60.0        # m
 EDGE = 0.37           # block cuts lie at pixel k - EDGE, never on a vertex
 SIGMA = 2.5           # px: blur of the gap-filled probabilities: a dashed, serrated band becomes one smooth ridge
                       # (at 1 px its skeleton was a fishbone, cut into pieces too short to keep)
 MIN_SCORE = 0.3       # lines the model drew weaker than this are left out; the app's slider picks among the rest
+# The score the app's slider uses: the model's strength times a factor for how track-like the imagery is across the
+# line (lineness, see line_features): 0.55 at lineness -2 or less (a step between two surfaces: field or forest edge),
+# rising to 1 at 4 and more (a strip unlike both sides). Set on 48 hand-labelled lines (2026-10-24): real tracks had
+# lineness median ~11 (19 of 20 above 2), field/forest edges, terraces and ditches median ~1 (15 of 19 below 2).
+LINE_LO, LINE_HI, LINE_F = -2.0, 4.0, 0.55
+
+
+def bridges(lines, kept, why, score):
+    """Dropped pieces that link two kept lines: the middles of tracks cut at side junctions, often short or faint.
+    Searches from every kept line's end through dropped pieces (short, wiggly or weak only), up to BRIDGE metres, to
+    another kept line's end. Returns {piece: score} - the weaker of the two lines it links, so the track shows whole."""
+    import heapq
+    from collections import defaultdict
+    key = lambda c: (round(c[0], 2), round(c[1], 2))
+    ends = [(key(g.coords[0]), key(g.coords[-1])) for g in lines]
+    anchor = {}
+    for k in np.flatnonzero(kept):
+        for e in ends[k]:
+            anchor[e] = max(anchor.get(e, 0.0), float(score[k]))
+    adj = defaultdict(list)
+    for k, w in why.items():
+        if w in ("short", "wiggly", "weak") and ends[k][0] != ends[k][1]:
+            a, b = ends[k]
+            adj[a].append((b, k, lines[k].length))
+            adj[b].append((a, k, lines[k].length))
+    out, limit = {}, BRIDGE / MPP
+    for start in [e for e in anchor if e in adj]:
+        dist, prev, heap = {start: 0.0}, {}, [(0.0, start)]
+        while heap:
+            d, u = heapq.heappop(heap)
+            if d > dist.get(u, math.inf):
+                continue
+            if u != start and u in anchor:
+                s, v = min(anchor[start], anchor[u]), u
+                while v != start:
+                    v, k = prev[v]
+                    out[k] = max(out.get(k, 0.0), s)
+                continue
+            for v, k, L in adj[u]:
+                if d + L <= limit and d + L < dist.get(v, math.inf):
+                    dist[v], prev[v] = d + L, (u, k)
+                    heapq.heappush(heap, (d + L, v))
+    return out
+
+
+def track_score(conf, lineness):
+    f = LINE_F + (1 - LINE_F) * np.clip((np.nan_to_num(lineness, nan=0.0) - LINE_LO) / (LINE_HI - LINE_LO), 0, 1)
+    return conf * f
 SMOOTH = 5            # points (every 4 px) averaged along the final lines: the skeleton zig-zags
 MAX_WIGGLE = 1.6      # length / end-to-end distance above which a short line is noise
 BARE = 60             # WorldCover bare ground (quarries, rock): the model traces their rims
 TWIN = 8.0            # m: a line this close to a longer AI line along 60 % of it is the same track drawn twice
+BRIDGE = 150.0        # m: dropped pieces (short, wiggly, weak) chained up to this long between two kept lines are kept
 FOREST_CONF = 0.8     # under mostly forest (tree share > 0.6) keep only lines the model is this sure of
 VILLAGE = 200.0       # m: lines mostly this close to buildings (where maps have the roads) are mostly parcel edges...
 SHORT, SHORT_CONF = 100.0, 0.5   # m: shorter lines stay only when the model is at least this sure
@@ -124,27 +174,20 @@ def trace(skel):
     return chains, centre
 
 
-def pruned(sk, rounds=3):
-    """Traces the skeleton, removing dead-end spurs shorter than SPUR off junctions in a few rounds (each round can
-    expose new ones). Returns (chains, centre, degree of each node cluster)."""
-    from skimage.morphology import skeletonize
-    for r in range(rounds + 1):
-        chains, centre = trace(sk)
-        deg = np.zeros(len(centre), int)
+def prune(chains, rounds=4):
+    """Drops dead-end spurs (shorter than SPUR, free at one end, a junction at the other) from the traced chains, in
+    rounds: a round can leave new spurs. The spine pieces left at a former junction share its centre point, so the
+    later line merge joins them again. On the graph: re-tracing the image per round cost 5 of the 7 s a block took."""
+    for _ in range(rounds):
+        deg = {}
         for a, b, _ in chains:
-            deg[a] += 1
-            deg[b] += 1
-        spurs = [(a, b, path) for a, b, path in chains
-                 if len(path) < SPUR and min(deg[a], deg[b]) == 1 and max(deg[a], deg[b]) >= 3]
-        if not spurs or r == rounds:
-            return [c for c in chains if not any(c is x for x in spurs)] if r == rounds else chains, centre, deg
-        sk = sk.copy()
-        for a, b, path in spurs:
-            for y, x in path:
-                sk[y, x] = False
-            ey, ex = centre[a] if deg[a] == 1 else centre[b]          # the free end pixel
-            sk[int(round(ey)), int(round(ex))] = False
-        sk = skeletonize(sk)
+            deg[a] = deg.get(a, 0) + 1
+            deg[b] = deg.get(b, 0) + 1
+        keep = [c for c in chains if not (len(c[2]) < SPUR and min(deg[c[0]], deg[c[1]]) == 1 and max(deg[c[0]], deg[c[1]]) >= 3)]
+        if len(keep) == len(chains):
+            break
+        chains = keep
+    return chains
 
 
 def block(job):
@@ -156,7 +199,8 @@ def block(job):
     mask = ndimage.binary_closing(mask, structure=disk(2))
     mask = remove_small_objects(mask, max_size=60)
     mask = remove_small_holes(mask, max_size=150)          # a track drawn as two lines -> one
-    chains, centre, deg = pruned(skeletonize(mask))
+    chains, centre = trace(skeletonize(mask))
+    chains = prune(chains)
     out = []
     ox, oy = bi * B * 512 - HALO * 512, bj * B * 512 - HALO * 512          # mosaic origin in the area's pixel grid
     x0, y0 = HALO * 512 + ox - EDGE, HALO * 512 + oy - EDGE
@@ -238,7 +282,7 @@ def sample_grey(xy, X0, Y0):
     return out
 
 
-def line_features(pts, X0, Y0):
+def line_features(pts, X0, Y0, imagery=False):
     """Per line (points every 2 px): strength = mean over its points of the strongest raw prediction within 2 px (how
     clearly the model drew it), and lineness = median over its points of |centre - sides| - |left - right| / 2 in the
     imagery, sides ~4.5 m out: a track differs from the ground on both sides, a field or terrace edge is a step."""
@@ -246,19 +290,24 @@ def line_features(pts, X0, Y0):
     lid = np.repeat(np.arange(len(pts)), [len(p) for p in pts])
     cnt = np.bincount(lid, minlength=len(pts))
     strength = np.bincount(lid, sample_pred(allp, X0, Y0, peak=True), minlength=len(pts)) / cnt
+    lineness = np.full(len(pts), np.nan)
+    if not imagery:                              # lineness only reports so far (DS_AI_LINENESS=1); it costs a pass
+        return strength, lineness, allp, lid, cnt
+    off = np.concatenate([[0], np.cumsum(cnt)])
     nrm = np.zeros_like(allp)
     for k, p in enumerate(pts):                                  # unit normals from central differences
-        t = np.gradient(p, axis=0) if len(p) > 1 else np.array([[1.0, 0.0]])
-        t /= np.maximum(1e-9, np.hypot(*t.T))[:, None]
-        nrm[lid == k] = np.column_stack([-t[:, 1], t[:, 0]]) if len(p) > 1 else 0
-    g = {o: sample_grey(allp + o * nrm, X0, Y0) for o in (-6, -5, -1, 0, 1, 5, 6)}
+        if len(p) > 1:
+            t = np.gradient(p, axis=0)
+            t /= np.maximum(1e-9, np.hypot(*t.T))[:, None]
+            nrm[off[k]:off[k + 1]] = np.column_stack([-t[:, 1], t[:, 0]])
+    offs = (-6, -5, -1, 0, 1, 5, 6)                              # one pass: each tile is decoded once for all offsets
+    gs = sample_grey(np.concatenate([allp + o * nrm for o in offs]), X0, Y0)
+    g = {o: gs[k * len(allp):(k + 1) * len(allp)] for k, o in enumerate(offs)}
     centre = (g[-1] + g[0] + g[1]) / 3
     left, right = (g[-6] + g[-5]) / 2, (g[5] + g[6]) / 2
     pt = np.abs(centre - (left + right) / 2) - np.abs(left - right) / 2
-    lineness = np.full(len(pts), np.nan)
-    order = np.argsort(lid, kind="stable")
-    for k, grp in enumerate(np.split(order, np.cumsum(cnt)[:-1])):
-        v = pt[grp]
+    for k in range(len(pts)):
+        v = pt[off[k]:off[k + 1]]
         v = v[np.isfinite(v)]
         if len(v):
             lineness[k] = np.median(v)
@@ -304,14 +353,23 @@ def landcover_sampler(X0, Y0, near=None):
     return sample
 
 
-def run(jobs, X0, Y0, out_path):
+def run(jobs, X0, Y0, out_path, cache=None):
+    """jobs: blocks to trace. cache: a .npz of the traced pieces - read when it exists, else written."""
     t0 = time.time()
     pieces = []
-    with ProcessPoolExecutor(10) as pool:
-        for k, out in enumerate(pool.map(block, jobs, chunksize=4), 1):
-            pieces += out
-            if k % 200 == 0:
-                print(f"  blocks {k}/{len(jobs)}, {len(pieces)} pieces ({time.time() - t0:.0f} s)", flush=True)
+    if cache and cache.exists():
+        c = np.load(cache)
+        pieces = np.split(c["xy"].astype(float), c["off"][1:-1])
+        print(f"traced pieces from {cache.name}: {len(pieces)}", flush=True)
+    else:
+        with ProcessPoolExecutor(10) as pool:
+            for k, out in enumerate(pool.map(block, jobs, chunksize=4), 1):
+                pieces += out
+                if k % 200 == 0:
+                    print(f"  blocks {k}/{len(jobs)}, {len(pieces)} pieces ({time.time() - t0:.0f} s)", flush=True)
+        if cache:
+            np.savez(cache, xy=np.concatenate(pieces).astype(np.float32),
+                     off=np.concatenate([[0], np.cumsum([len(p) for p in pieces])]))
     merged = shapely.get_parts(shapely.line_merge(shapely.multilinestrings(
         [shapely.linestrings(np.round(p, 3)) for p in pieces if len(p) >= 2])))
     km_all = shapely.length(merged).sum() * MPP / 1000
@@ -355,77 +413,84 @@ def run(jobs, X0, Y0, out_path):
         pairs = pairs[np.argsort(dist)]
     used = np.zeros(len(ends), bool)
     links = []
-    cos_max = math.cos(math.radians(GAP_ANGLE))
     for a, b in pairs:
         if used[a] or used[b] or owner[a] == owner[b]:
             continue
         ab = ends[b] - ends[a]
         d = math.hypot(*ab)
-        if d * MPP > GAP_ANY and (d == 0 or out_dir[a] @ ab / d < cos_max or out_dir[b] @ -ab / d < cos_max):
+        ca, cb = (out_dir[a] @ ab / d, out_dir[b] @ -ab / d) if d > 0 else (1.0, 1.0)
+        if not any(d * MPP <= g and min(ca, cb) >= math.cos(math.radians(ang)) for g, ang in GAPS):
             continue
         used[a] = used[b] = True
         links.append(np.array([ends[a], ends[b]]))
     lines = shapely.get_parts(shapely.line_merge(shapely.multilinestrings(
         [shapely.linestrings(r) for r in runs] + [shapely.linestrings(x) for x in links])))
-    lines = [smooth(g) for g in lines if g.length * MPP >= MIN_LEN]
-    n0 = len(lines)
-    lines = [g for g in lines if g.length * MPP >= 200
-             or g.length <= MAX_WIGGLE * np.hypot(*(np.asarray(g.coords[-1]) - g.coords[0]))]
-    print(f"{len(links)} gaps joined; {len(lines)} lines of {MIN_LEN:.0f} m or more ({n0 - len(lines)} short wiggly ones "
-          f"dropped, {time.time() - t0:.0f} s)", flush=True)
+    # every piece is scored: short ones between junctions can still be the middle of a track (bridges, below)
+    lines = [smooth(g) for g in lines]
+    print(f"{len(links)} gaps joined; {len(lines)} lines ({time.time() - t0:.0f} s)", flush=True)
 
     # how clearly each line is drawn and how much it looks like a track, against the mapped dirt tracks
     pts = [densify(np.asarray(g.coords), 2.0) for g in lines]
-    conf, lineness, allp, lid, cnt = line_features(pts, X0, Y0)
-    cs, cl, *_ = line_features([densify(r, 2.0) for r in cal], X0, Y0) if cal else (np.array([0.5]), np.array([0.0]))
-    t_conf, t_line = float(np.quantile(cs, CAL_Q)), float(np.nanquantile(cl, CAL_Q))
-    print(f"calibration on {len(cal)} stretches of mapped dirt tracks: keep strength >= {t_conf:.2f}, lineness >= "
-          f"{t_line:.1f} (their medians {np.median(cs):.2f}, {np.nanmedian(cl):.1f}; new lines {np.median(conf):.2f}, "
-          f"{np.nanmedian(lineness):.1f})", flush=True)
+    img = os.environ.get("DS_AI_LINENESS", "1") != "0"           # the score needs it
+    conf, lineness, allp, lid, cnt = line_features(pts, X0, Y0, img)
+    if cal:
+        cs, cl, *_ = line_features([densify(r, 2.0) for r in cal], X0, Y0, img)
+        q = [round(float(v), 2) for v in np.quantile(cs, [0.1, 0.25, 0.5, 0.75])]
+        print(f"mapped dirt tracks the model also drew ({len(cal)} stretches): strength quartiles {q}; "
+              f"new lines: {[round(float(v), 2) for v in np.quantile(conf, [0.1, 0.25, 0.5, 0.75])]}", flush=True)
     lc = landcover_sampler(X0, Y0)(allp)
     village = np.bincount(lid, landcover_sampler(X0, Y0, (50, VILLAGE))(allp).astype(float), minlength=len(pts))
     shore = np.bincount(lid, landcover_sampler(X0, Y0, (80, WATER))(allp).astype(float), minlength=len(pts))
     share = {name: np.bincount(lid, (lc == code).astype(float), minlength=len(pts)) / cnt
              for name, code in (("tree", 10), ("grass", 30), ("crop", 40), ("built", 50), ("bare", BARE))}
     n = 2 ** Z * 256
-    feats = []
+    score = track_score(conf, lineness)
     near = cKDTree(allp)
     kept = np.zeros(len(lines), bool)
-    n_twin = n_weak = n_shore = 0
-    debug = []
+    why = {}
     for k in sorted(range(len(lines)), key=lambda k: -lines[k].length):          # longest first
         g = lines[k]
-        why = None
+        m = g.length * MPP
         if share["built"][k] > 0.5 or share["bare"][k] > 0.5:
-            why = "built/bare"
-        elif conf[k] < MIN_SCORE or g.length * MPP < SHORT and conf[k] < (MIN_SCORE + 1) / 2:
-            why = "weak"
-            n_weak += 1
+            why[k] = "built/bare"
         elif shore[k] / cnt[k] > 0.5:
-            why = "shore"
-            n_shore += 1
-        if why:
-            debug.append((k, why))
-            continue
-        nb = near.query_ball_point(pts[k], TWIN / MPP)
-        if np.mean([kept[lid[i]].any() if i else False for i in nb]) > 0.6:
-            n_twin += 1
-            debug.append((k, "twin"))
-            continue
+            why[k] = "shore"
+        elif m < MIN_LEN:
+            why[k] = "short"
+        elif m < 200 and g.length > MAX_WIGGLE * np.hypot(*(np.asarray(g.coords[-1]) - g.coords[0])):
+            why[k] = "wiggly"
+        elif conf[k] < MIN_SCORE or m < SHORT and conf[k] < (MIN_SCORE + 1) / 2:
+            why[k] = "weak"
+        else:
+            nb = near.query_ball_point(pts[k][::4], TWIN / MPP)          # every 4th point (8 px) is enough
+            if np.mean([kept[lid[i]].any() if i else False for i in nb]) > 0.6:
+                why[k] = "twin"
+            else:
+                kept[k] = True
+    bridge = bridges(lines, kept, why, score)
+    for k, b in bridge.items():
         kept[k] = True
+        score[k] = max(score[k], b)
+        del why[k]
+    from collections import Counter
+    print(f"kept {int(kept.sum())} lines; {len(bridge)} short or weak pieces kept as bridges between them; dropped "
+          f"{dict(Counter(why.values()))}", flush=True)
+    debug = sorted(why.items())
+    feats = []
+    for k in np.flatnonzero(kept):
+        g = lines[k]
         xy = np.asarray(shapely.simplify(g, 0.8).coords)
         lon = (xy[:, 0] + X0 * 256 + 0.5) / n * 360 - 180
         lat = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * (xy[:, 1] + Y0 * 256 + 0.5) / n))))
         feats.append({"type": "Feature",
                       "properties": {"id": f"a{len(feats)}", "len": round(g.length * MPP), "conf": round(float(conf[k]), 2),
-                                     "line": round(float(lineness[k]), 1),
+                                     "score": round(float(score[k]), 2),
+                                     **({"line": round(float(lineness[k]), 1)} if np.isfinite(lineness[k]) else {}),
                                      **{name: round(float(v[k]), 2) for name, v in share.items()}},
                       "geometry": {"type": "LineString", "coordinates": [[round(x, 6), round(y, 6)] for x, y in zip(lon, lat)]}})
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump({"type": "FeatureCollection", "features": feats}, fh)
     km = sum(f["properties"]["len"] for f in feats) / 1000
-    print(f"dropped {n_weak} weak (below {MIN_SCORE}, or short and below {(MIN_SCORE + 1) / 2:.2f}), {n_shore} shores "
-          f"and {n_twin} twins")
     if os.environ.get("DS_AI_DEBUG"):                           # every candidate with why it went, for review renders
         dfe = []
         for k, why in debug:
@@ -447,7 +512,8 @@ def main():
     meta = json.loads((AI / "grid.json").read_text())
     X0, Y0, ni, nj = meta["X0"], meta["Y0"], meta["ni"], meta["nj"]
     jobs = [(bi, bj, ni, nj, thr) for bj in range((nj + B - 1) // B) for bi in range((ni + B - 1) // B)]
-    run(jobs, X0, Y0, AI / "ai_lines.geojson")
+    # the traced pieces are kept per threshold pair: re-runs that only change later steps skip the long part
+    run(jobs, X0, Y0, AI / "ai_lines.geojson", AI / f"pieces_{thr[0]}_{thr[1]}_{SIGMA}_{SPUR}.npz")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ detections (Microsoft road detections).
 import gzip
 import json
 import math
+import os
 import time
 from collections import defaultdict
 
@@ -23,6 +24,9 @@ from common import AREA, BBOX, bbox_buffer, read_fc
 ZMIN, ZMAX = 8, 14
 EXTENT, BUF = 4096, 64
 OUT = AREA / "area.pmtiles"
+if __name__ == "__main__" and os.environ.get("DS_TILES_OUT"):          # write elsewhere (e.g. to compare builds)
+    from pathlib import Path
+    OUT = Path(os.environ["DS_TILES_OUT"])
 
 
 def merc(lon, lat):
@@ -246,7 +250,7 @@ def detections_layer():
 
 # ---------------------------------------------------------------- tiling
 
-def tile_layer(layer, z, x, y):
+def tile_layer(layer, z, x, y, zmax=ZMAX):
     n = 2 ** z
     pad = BUF / EXTENT / n
     box = shapely.box(x / n - pad, y / n - pad, (x + 1) / n + pad, (y + 1) / n + pad)
@@ -257,7 +261,7 @@ def tile_layer(layer, z, x, y):
     geoms = shapely.transform(layer.geoms[idx], lambda c: (c * n - [x, y]) * EXTENT)
     if layer.kind != "point":
         geoms = shapely.clip_by_rect(geoms, -BUF, -BUF, EXTENT + BUF, EXTENT + BUF)
-        tol = 1.5 if z == ZMAX else 2.5
+        tol = 1.5 if z == zmax else 2.5
         geoms = shapely.simplify(geoms, tol, preserve_topology=layer.kind == "poly")
     feats = []
     for g, i in zip(geoms, idx):
@@ -282,18 +286,13 @@ def tile_layer(layer, z, x, y):
     return feats
 
 
-def main():
-    t0 = time.time()
-    layers = [tracks_layer(), waterways_layer(), *polygon_layers(), *point_layers(), routes_layer(),
-              contours_layer(), detections_layer()]
-    for L in layers:
-        L.finish()
-        print(f"{L.name:11s} {len(L.geoms):7d} features", flush=True)
-    print(f"loaded in {time.time() - t0:.0f} s", flush=True)
-
-    w, s, e, n = bbox_buffer(BBOX, 1000)
+def write_pmtiles(layers, out, zmin, zmax, bounds, name, attribution, bbox=BBOX, t0=None):
+    """Vector tiles zmin-zmax of the finished layers over bounds (w, s, e, n) -> a PMTiles file (or a BytesIO).
+    Returns (bytes per zoom, z-max bytes per layer, tile count)."""
+    t0 = t0 or time.time()
+    w, s, e, n = bounds
     tiles = []
-    for z in range(ZMIN, ZMAX + 1):
+    for z in range(zmin, zmax + 1):
         x0, y0 = merc(w, n)
         x1, y1 = merc(e, s)
         k = 2 ** z
@@ -303,29 +302,29 @@ def main():
     tiles.sort()
     sizes = defaultdict(int)
     layer_bytes = defaultdict(int)
-    with open(OUT, "wb") as fh:
+    opts = {"extents": EXTENT, "y_coord_down": True, "on_invalid_geometry": on_invalid_geometry_make_valid}
+    fh = open(out, "wb") if not hasattr(out, "write") else out
+    try:
         writer = Writer(fh)
         for i, (tid, z, x, y) in enumerate(tiles):
             data_layers = []
             for L in layers:
-                feats = tile_layer(L, z, x, y)
+                feats = tile_layer(L, z, x, y, zmax)
                 if feats:
                     data_layers.append({"name": L.name, "features": feats})
             if not data_layers:
                 continue
-            raw = encode(data_layers, default_options={"extents": EXTENT, "y_coord_down": True,
-                                                       "on_invalid_geometry": on_invalid_geometry_make_valid})
-            if z == ZMAX:
+            raw = encode(data_layers, default_options=opts)
+            if z == zmax:
                 for dl in data_layers:
-                    layer_bytes[dl["name"]] += len(encode([dl], default_options={"extents": EXTENT, "y_coord_down": True,
-                                                         "on_invalid_geometry": on_invalid_geometry_make_valid}))
+                    layer_bytes[dl["name"]] += len(encode([dl], default_options=opts))
             data = gzip.compress(raw, compresslevel=9, mtime=0)
             sizes[z] += len(data)
             writer.write_tile(tid, data)
             if i % 300 == 0:
                 print(f"  tile {i}/{len(tiles)} z{z} ({time.time() - t0:.0f} s)", flush=True)
-        cx, cy = (BBOX[0] + BBOX[2]) / 2, (BBOX[1] + BBOX[3]) / 2
-        header = {"tile_type": TileType.MVT, "tile_compression": Compression.GZIP, "min_zoom": ZMIN, "max_zoom": ZMAX,
+        cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+        header = {"tile_type": TileType.MVT, "tile_compression": Compression.GZIP, "min_zoom": zmin, "max_zoom": zmax,
                   "min_lon_e7": int(w * 1e7), "min_lat_e7": int(s * 1e7), "max_lon_e7": int(e * 1e7),
                   "max_lat_e7": int(n * 1e7), "center_zoom": 10, "center_lon_e7": int(cx * 1e7), "center_lat_e7": int(cy * 1e7)}
         fields = {}
@@ -336,19 +335,35 @@ def main():
                     keys.setdefault(kk, "Number" if isinstance(vv, (int, float)) else "String")
             fields[L.name] = keys
         metadata = {
-            "name": "DirtScout area pack", "format": "pbf", "version": time.strftime("%Y-%m-%d"),
-            "attribution": "© OpenStreetMap contributors (ODbL); road detections © Microsoft (ODbL); "
-                           "WorldCover © ESA 2021 (CC BY 4.0); elevation and contours: FABDEM V1-2 © Univ. of Bristol "
-                           "(CC BY-NC-SA 4.0)",
-            "bbox": BBOX,
-            "vector_layers": [{"id": L.name, "fields": fields[L.name], "minzoom": int(L.minz.min()), "maxzoom": ZMAX}
+            "name": name, "format": "pbf", "version": time.strftime("%Y-%m-%d"), "attribution": attribution,
+            "bbox": list(bbox),
+            "vector_layers": [{"id": L.name, "fields": fields[L.name], "minzoom": int(L.minz.min()), "maxzoom": zmax}
                               for L in layers],
         }
         writer.finalize(header, metadata)
+    finally:
+        if fh is not out:
+            fh.close()
+    return sizes, layer_bytes, len(tiles)
+
+
+def main():
+    t0 = time.time()
+    layers = [tracks_layer(), waterways_layer(), *polygon_layers(), *point_layers(), routes_layer(),
+              contours_layer(), detections_layer()]
+    for L in layers:
+        L.finish()
+        print(f"{L.name:11s} {len(L.geoms):7d} features", flush=True)
+    print(f"loaded in {time.time() - t0:.0f} s", flush=True)
+    sizes, layer_bytes, n_tiles = write_pmtiles(
+        layers, OUT, ZMIN, ZMAX, bbox_buffer(BBOX, 1000), "DirtScout area pack",
+        "© OpenStreetMap contributors (ODbL); road detections © Microsoft (ODbL); "
+        "WorldCover © ESA 2021 (CC BY 4.0); elevation and contours: FABDEM V1-2 © Univ. of Bristol "
+        "(CC BY-NC-SA 4.0)", t0=t0)
     total = OUT.stat().st_size
     print("bytes per zoom:", {z: f"{v / 1e6:.1f} MB" for z, v in sorted(sizes.items())})
     print("z14 bytes per layer (uncompressed):", {k: f"{v / 1e6:.1f} MB" for k, v in sorted(layer_bytes.items(), key=lambda kv: -kv[1])})
-    print(f"{OUT.name}: {total / 1e6:.1f} MB, {len(tiles)} tiles, {time.time() - t0:.0f} s")
+    print(f"{OUT.name}: {total / 1e6:.1f} MB, {n_tiles} tiles, {time.time() - t0:.0f} s")
 
 
 if __name__ == "__main__":
