@@ -40,6 +40,8 @@ https://tiganetearobert.github.io/dirt-route-planner/
 M1-M5 are built and tested on the PC (tests/e2e/m1, m2, m4, m5) and deployed. They wait for the owner's phone test
 and feedback. The risk weights (core/scoring.js) and the route costs (core/routing.js) are first calibrations. The ten
 sample rides (tools/samples.mjs -> pack samples.json) are the review set before M6 (100 tracks).
+The AI-found tracks (7,725 tracks, ~900 km, deployed 2026-10-23) wait for the owner's verdict: tune the filters in
+pipeline/ai_vectorize.py from what they report (terraces, field edges and shores are the known false lines).
 When the owner asks to "investigate" a GPX: `node tools/investigate.mjs <gpx>`, then
 `uv run --with pillow python tools/imagery_crops.py private/reports/<name>`, look at the flag-*.jpg images, and report
 the verdict, risks with km markers and ways around. The imagery stays local (terms).
