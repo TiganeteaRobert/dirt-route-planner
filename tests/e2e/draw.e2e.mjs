@@ -48,9 +48,14 @@ try {
   await settle(500);
   // first tap 8 px off the track (should snap), then three taps going right and down
   await page.mouse.click(start.x + 8, start.y + 6);
-  for (const [dx, dy] of [[50, 60], [95, 130], [140, 210]]) { await settle(250); await page.mouse.click(start.x + dx, start.y + dy); }
+  for (const [dx, dy] of [[50, 60], [95, 130], [140, 210]]) {
+    await page.waitForFunction(() => !window.dirtscout.draw.busy, null, { timeout: 30000 });
+    await page.mouse.click(start.x + dx, start.y + dy);
+    await settle(300);
+  }
   await settle(600);
-  const st = await page.evaluate(() => ({ n: window.dirtscout.draw.coords.length, snapped: window.dirtscout.draw.snapped, bar: document.querySelector('#drawbar-text').textContent }));
+  await page.waitForFunction(() => window.dirtscout.draw && !window.dirtscout.draw.busy && window.dirtscout.draw.taps.length === 4, null, { timeout: 60000 });
+  const st = await page.evaluate(() => ({ taps: window.dirtscout.draw.taps.length, snapped: window.dirtscout.draw.taps.map((t) => t.snapped), bar: document.querySelector('#drawbar-text').textContent }));
   console.log('drawing:', JSON.stringify(st));
   await shot('drawing');
   page.once('dialog', (d) => d.accept('Test road'));
