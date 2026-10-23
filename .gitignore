@@ -1,0 +1,12 @@
+node_modules/
+dist/
+# Downloaded and generated data (OSM, DEM, detections, imagery pulls): never committed.
+data/
+# Private files: the planning handoff, TET/ACT GPX, personal tracks. Never committed or hosted (TET/ACT terms).
+private/
+*.gpx
+*.kml
+*.kmz
+.claude/
+*.log
+tests/e2e/out/
