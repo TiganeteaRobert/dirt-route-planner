@@ -87,6 +87,16 @@ function buildStyle() {
       paint: { 'circle-radius': 6, 'circle-color': ['get', 'color'], 'circle-stroke-color': '#000000', 'circle-stroke-width': 2 },
     },
   );
+  sources.draw = { type: 'geojson', data: EMPTY_FC };
+  layers.push(
+    { id: 'draw-casing', type: 'line', source: 'draw', filter: ['==', ['geometry-type'], 'LineString'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#000000', 'line-width': 9, 'line-opacity': 0.6 } },
+    { id: 'draw-line', type: 'line', source: 'draw', filter: ['==', ['geometry-type'], 'LineString'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#ffffff', 'line-width': 5 } },
+    { id: 'draw-pts', type: 'circle', source: 'draw', filter: ['==', ['geometry-type'], 'Point'],
+      paint: { 'circle-radius': ['case', ['==', ['get', 'snap'], 1], 8, 6], 'circle-color': ['case', ['==', ['get', 'snap'], 1], '#00e676', '#ffffff'],
+        'circle-stroke-color': '#000000', 'circle-stroke-width': 2.5 } },
+  );
   sources.inv = { type: 'geojson', data: EMPTY_FC };
   layers.push(
     { id: 'inv-casing', type: 'line', source: 'inv', layout: { 'line-cap': 'round', 'line-join': 'round' },
@@ -209,6 +219,12 @@ export function applyLayers(map) {
     map.setPaintProperty(l, 'text-color', topo ? '#1b1b1b' : '#ffffff');
     map.setPaintProperty(l, 'text-halo-color', topo ? '#ffffff' : '#000000');
   }
+}
+
+export function setDraw(map, coords, snapped) {
+  const features = coords.map((c, i) => ({ type: 'Feature', properties: { snap: snapped[i] ? 1 : 0 }, geometry: { type: 'Point', coordinates: c } }));
+  if (coords.length > 1) features.unshift({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } });
+  map.getSource('draw')?.setData({ type: 'FeatureCollection', features });
 }
 
 export function setInvestigation(map, fc) {

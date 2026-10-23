@@ -70,6 +70,17 @@ export async function saveRecording(rec, name) {
   return track;
 }
 
+// Saves a road the rider drew on the map (kind 'drawn'); it joins the routing network (network: true).
+export async function saveDrawn(name, coords, stats) {
+  const fc = { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { name, kind: 'trk' }, geometry: { type: 'LineString', coordinates: coords } }] };
+  const track = {
+    id: `draw-${Date.now().toString(36)}`, name, kind: 'drawn', color: '#ffffff', visible: true, created: Date.now(), network: true,
+    fc, stats: { ...statsOf(fc), ...stats },
+  };
+  await db.put('tracks', track);
+  return track;
+}
+
 // Saves a generated route as a track (kind 'planned').
 export async function savePlanned(name, coords, stats, opts, color) {
   const fc = { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { name, kind: 'trk' }, geometry: { type: 'LineString', coordinates: coords } }] };

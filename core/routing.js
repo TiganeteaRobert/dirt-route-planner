@@ -4,8 +4,10 @@ import { decodePolyline } from './polyline.js';
 
 export const CLASSES = ['track', 'path', 'bridleway', 'unclassified', 'residential', 'service', 'living_street', 'road',
   'tertiary', 'secondary', 'primary', 'trunk', 'detected'];
-// Cost factor by class: a dirt-bike ride prefers tracks over tarmac, and busy roads least of all.
-const CLASS_FACTOR = [0.8, 1.0, 1.0, 1.1, 1.3, 1.2, 1.4, 1.15, 1.5, 2.0, 2.8, 4.0, 0.9];
+// Cost factor by class: a dirt-bike ride prefers tracks over tarmac, and busy roads least of all. Looked up by name,
+// because each graph file carries its own class list (and the rider's roads add "mine").
+const CLASS_FACTOR = { track: 0.8, path: 1.0, bridleway: 1.0, unclassified: 1.1, residential: 1.3, service: 1.2,
+  living_street: 1.4, road: 1.15, tertiary: 1.5, secondary: 2.0, primary: 2.8, trunk: 4.0, detected: 0.9, mine: 0.75 };
 const RISK_FACTOR = [1.0, 1.3, 4.0];
 const PAVED_FACTOR = [1.0, 1.8, 1.15];          // unpaved, paved, unknown (when preferring dirt)
 const R = 6371008.8;
@@ -47,8 +49,9 @@ export function loadGraph(json) {
     adjE[fill[E.b[e]]] = e; adjD[fill[E.b[e]]++] = -1;
   }
   const col = (k, T = Float32Array) => T.from(E[k]);
+  const classes = json.classes ?? CLASSES;
   return {
-    N, M, lon, lat, off, adjE, adjD,
+    N, M, lon, lat, off, adjE, adjD, classes, classFactor: Float32Array.from(classes, (c) => CLASS_FACTOR[c] ?? 1.2),
     e: {
       a: Int32Array.from(E.a), b: Int32Array.from(E.b), len: col('len'), cls: col('cls', Int8Array), risk: col('risk', Int8Array),
       lvl: col('lvl', Int8Array), leg: col('leg', Int8Array), ex: col('ex', Int8Array), g: col('g'), gdir: col('gdir', Int8Array),
@@ -82,7 +85,7 @@ export function makeCost(G, opts = {}, used = null) {
   return (e, dir) => {
     if (E.leg[e] === 2 && !allowNoAccess) return Infinity;
     if (E.risk[e] === 2 && avoidRed) return Infinity;
-    let f = RISK_FACTOR[E.risk[e]] * CLASS_FACTOR[E.cls[e]];
+    let f = RISK_FACTOR[E.risk[e]] * G.classFactor[E.cls[e]];
     if (preferDirt) f *= PAVED_FACTOR[E.pav[e]];
     if (E.leg[e] === 1) f *= 2;
     if (climbs > 0 && uphillGrade(G, e, dir) >= minClimbGrade) f *= 0.55;

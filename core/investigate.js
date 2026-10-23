@@ -2,7 +2,7 @@
 // build its elevation profile (climbs and steep descents with km markers), and look for ways around the red
 // stretches. No DOM: the phone and the PC tools use the same code.
 import { decodePolyline } from './polyline.js';
-import { haversine, shortestPath, makeCost, routeStats, routeCoords, CLASSES } from './routing.js';
+import { haversine, shortestPath, makeCost, routeStats, routeCoords } from './routing.js';
 import { densify } from './geo.js';
 
 const CELL = 0.002;                       // index cell, degrees (~150 x 220 m here)
@@ -202,7 +202,7 @@ export async function investigate(G, X, coords, { elevAt = null, minClimb = 15, 
     const g = E.g[r.e];
     const uphill = g > 0 && E.gdir[r.e] * dir > 0;
     return {
-      from, to, len: to - from, e: r.e, dir, cls: CLASSES[E.cls[r.e]], name: G.names[r.e] || '', id: G.ids[r.e],
+      from, to, len: to - from, e: r.e, dir, cls: G.classes[E.cls[r.e]], name: G.names[r.e] || '', id: G.ids[r.e],
       risk: E.risk[r.e], legal: E.leg[r.e], exists: E.ex[r.e], grade: g > 0 ? g : null, uphill, det: E.det[r.e], tree: E.tree[r.e],
       start: r.start, end: r.end,
     };

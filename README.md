@@ -38,6 +38,10 @@ south to Aiud. An installable web app for Android (Chrome), built to work in air
   ask for a loop or an out-and-back ride, 2-60 km, 0-3 climbs steeper than 12-25 %, with red tracks avoided and dirt
   preferred over tarmac. It returns up to five different routes with climb, dirt share and risk mix, to show, save
   or export as GPX. Ten sample rides around Cluj come with the area pack for your review.
+- **Roads no map has:** 705 km of roads that Microsoft's AI saw in Bing imagery but OpenStreetMap lacks are part of
+  the map and the planner. They show as cyan dashes, marked as unverified (yellow) until GPS traces back them up.
+  For anything else: **Tracks → Draw a road on the map**. Tap along it on the imagery; taps near a mapped track snap
+  onto it. Your road then counts in Plan and Investigate. Any recorded ride can also be marked "Use as a road".
 - **Investigate (M5):** on any track (Wikiloc, TET, a plan, your ride), DirtScout map-matches it to the network. It
   colours each stretch (fine / doubtful / not on any mapped way), lists climbs, steep descents and risky stretches with
   km markers, and finds ways around the red stretches. On the PC, `tools/investigate.mjs` and

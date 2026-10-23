@@ -257,6 +257,23 @@ a.btn { display: inline-block; text-decoration: none; margin: 10px 0; }
   font: 800 15.5px system-ui, sans-serif;
 }
 
+/* ---- draw a road ---- */
+#drawbar {
+  position: absolute;
+  left: 10px;
+  right: 66px;
+  top: calc(60px + env(safe-area-inset-top));
+  background: #fff;
+  border-radius: 14px;
+  padding: 10px 12px 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  z-index: 12;
+  font-weight: 700;
+}
+#drawbar .row-btns { margin: 8px 0 6px; }
+#drawbar .btn { flex: 1; }
+@media (min-width: 760px) { #drawbar { width: 420px; right: auto; } }
+
 /* ---- position marker ---- */
 .me { width: 24px; height: 24px; }
 .me-dot {

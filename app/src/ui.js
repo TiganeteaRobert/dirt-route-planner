@@ -1,18 +1,20 @@
 // Panels (one bottom sheet at a time), the toolbar, status pills and toasts.
 import { SOURCES, LOCAL_OVERLAYS, SLOPE_CLASSES, OFFLINE_SOURCES, APP_NAME, DS_BASE, DS_OVERLAY_LIST } from './config.js';
 import { settings, saveSettings, defaultArea } from './settings.js';
-import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation } from './mapview.js';
+import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw } from './mapview.js';
+import { augmentGraph } from '../../core/usergraph.js';
 import { buildIndex, investigate } from '../../core/investigate.js';
 import { COLOR_MODES, DS_TRACK_LAYERS } from './dsstyle.js';
 import { scoreEdge } from '../../core/scoring.js';
 import { installed as packInstalled, fetchManifest, install as installPack, uninstall as uninstallPack, loadGraphJson, loadPackJson, PACK_FILES } from './pack.js';
 import { decodePolyline } from '../../core/polyline.js';
 import { loadGraph, nearestNode, generateRoutes, routeCoords, haversine } from '../../core/routing.js';
+import { densify } from '../../core/geo.js';
 import { downloader, estimateJob, sourceZooms } from './downloads.js';
 import * as db from './db.js';
 import { gps, recorder } from './gps.js';
 import * as wake from './wakelock.js';
-import { importFiles, updateTrack, deleteTrack, shareGPX, trackLines, saveRecording, savePlanned } from './tracks.js';
+import { importFiles, updateTrack, deleteTrack, shareGPX, trackLines, saveRecording, savePlanned, saveDrawn } from './tracks.js';
 import { upstreamURL, networkAllowed, elevationAt, clearDemCaches } from './tiles.js';
 import { h, fill, fmtDist, fmtSpeed, fmtElev, fmtBytes, fmtInt, fmtDuration } from './format.js';
 import { metersPerPixel, lon2x, lat2y, tileKey } from '../../core/tilemath.js';
@@ -217,7 +219,7 @@ function colorByControl() {
 const CLASS_NAMES = { track: 'Track', path: 'Path', bridleway: 'Bridleway', footway: 'Footway (no motors)', cycleway: 'Cycleway',
   steps: 'Steps', unclassified: 'Minor road', residential: 'Village street', service: 'Service road', tertiary: 'Tertiary road',
   secondary: 'Secondary road', primary: 'Primary road', trunk: 'Trunk road', motorway: 'Motorway', living_street: 'Living street',
-  detected: 'Road seen from above (not in OSM)' };
+  detected: 'Road seen from above (not in OSM)', mine: 'Your road' };
 const SAC = { hiking: 'T1 hiking', mountain_hiking: 'T2 mountain hiking', demanding_mountain_hiking: 'T3 demanding',
   alpine_hiking: 'T4 alpine', demanding_alpine_hiking: 'T5 demanding alpine', difficult_alpine_hiking: 'T6 difficult alpine' };
 
@@ -275,6 +277,7 @@ function renderInfo() {
 }
 
 function onMapClick(e) {
+  if (app.draw) { addDrawPoint(e); return; }
   if (app.planPick) {
     app.planPick = false;
     app.plan.start = [e.lngLat.lng, e.lngLat.lat];
@@ -308,7 +311,11 @@ async function ensureGraph() {
   if (!app.graph) {
     const json = await loadGraphJson();
     if (!json) throw new Error('the route network is not on this phone: install the area pack (Offline) or go online');
-    app.graph = loadGraph(json);
+    const roads = app.tracks.filter((t) => t.network).flatMap((t) => trackLines(t).map((coords, k) => ({
+      id: `${t.id}#${k}`, name: t.name, coords: coords.map((c) => [c[0], c[1]]),
+      g: t.stats?.g100 ?? -1, gdir: t.stats?.gdir ?? 0, up: t.stats?.up ?? 0, dn: t.stats?.dn ?? 0,
+    })));
+    app.graph = loadGraph(roads.length ? augmentGraph(json, roads).json : json);
     app.graphIndex = null;
   }
   if (!app.graphIndex) app.graphIndex = buildIndex(app.graph);
@@ -402,6 +409,92 @@ function renderInvestigation() {
     + 'Ask Claude on the PC for an imagery check of the red stretches.'));
   out.push(btn('Clear from the map', () => { setInvestigation(app.map, { type: 'FeatureCollection', features: [] }); app.inv = null; closePanel(); }));
   return out;
+}
+
+// ---------------------------------------------------------------- Draw a road
+
+function startDraw() {
+  app.draw = { coords: [], snapped: [] };
+  closePanel();
+  $('drawbar').hidden = false;
+  updateDrawBar();
+  toast('Tap along the road. Taps near a mapped track snap onto it (green), so your road joins the network.', { ms: 6000 });
+}
+
+function updateDrawBar() {
+  const d = app.draw;
+  let len = 0;
+  for (let i = 1; i < d.coords.length; i++) len += haversine(d.coords[i - 1][0], d.coords[i - 1][1], d.coords[i][0], d.coords[i][1]);
+  $('drawbar-text').textContent = d.coords.length ? `${d.coords.length} points · ${fmtDist(len)}` : 'Tap along the road';
+  $('draw-save').disabled = d.coords.length < 2;
+  $('draw-undo').disabled = !d.coords.length;
+  setDraw(app.map, d.coords, d.snapped);
+}
+
+// A tap near a rendered track (DirtScout or yours) snaps to the closest point on it.
+function snapPoint(e) {
+  const map = app.map;
+  const pad = 20;
+  const layers = [...DS_TRACK_LAYERS, 'tracks-line', 'tracks-tet'].filter((l) => map.getLayer(l) && map.getLayoutProperty(l, 'visibility') !== 'none');
+  const feats = map.queryRenderedFeatures([[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]], { layers });
+  let best = null, bd = pad;
+  for (const f of feats) {
+    const lines = f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : [];
+    for (const line of lines) {
+      for (let i = 0; i < line.length - 1; i++) {
+        const a = map.project(line[i]), b = map.project(line[i + 1]);
+        const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy;
+        const t = L2 ? Math.max(0, Math.min(1, ((e.point.x - a.x) * dx + (e.point.y - a.y) * dy) / L2)) : 0;
+        const px = a.x + t * dx, py = a.y + t * dy;
+        const d = Math.hypot(e.point.x - px, e.point.y - py);
+        if (d < bd) { bd = d; best = map.unproject([px, py]); }
+      }
+    }
+  }
+  return best ? [best.lng, best.lat] : null;
+}
+
+function addDrawPoint(e) {
+  const snapped = snapPoint(e);
+  app.draw.coords.push(snapped ?? [e.lngLat.lng, e.lngLat.lat]);
+  app.draw.snapped.push(!!snapped);
+  updateDrawBar();
+}
+
+function endDraw() {
+  app.draw = null;
+  $('drawbar').hidden = true;
+  setDraw(app.map, [], []);
+}
+
+// Elevation along the drawn road: climb, descent and the steepest 100 m (same smoothing as the pack).
+async function drawnProfile(coords) {
+  const pts = densify(coords, 10);
+  const el = [];
+  for (const p of pts) el.push(await elevationAt(p[0], p[1]));
+  if (el.some((v) => v == null)) return {};
+  const sm = el.map((_, i) => { let s = 0, n = 0; for (let k = -3; k <= 3; k++) { const v = el[i + k]; if (v != null) { s += v; n++; } } return s / n; });
+  let up = 0, dn = 0, g100 = 0, gdir = 0;
+  for (let i = 1; i < sm.length; i++) { const d = sm[i] - sm[i - 1]; if (d > 0) up += d; else dn -= d; }
+  for (let i = 0; i + 10 < sm.length; i++) {
+    const g = ((sm[i + 10] - sm[i]) / 100) * 100;
+    if (Math.abs(g) > g100) { g100 = Math.abs(g); gdir = g >= 0 ? 1 : -1; }
+  }
+  return { up: Math.round(up), dn: Math.round(dn), g100: Math.round(g100 * 10) / 10, gdir };
+}
+
+async function saveDraw() {
+  const d = app.draw;
+  if (!d || d.coords.length < 2) return;
+  const name = prompt('Name of this road', `My road ${new Date().toLocaleDateString()}`);
+  if (name === null) return;
+  const coords = d.coords;
+  endDraw();
+  const stats = await drawnProfile(coords);
+  const t = await saveDrawn(name.trim() || 'My road', coords, stats);
+  await app.refreshTracks();
+  app.graph = null;
+  toast(`Saved "${t.name}": Plan and Investigate now use it.`, { action: 'GPX', onAction: () => shareGPX(t) });
 }
 
 // ---------------------------------------------------------------- Plan a ride (M4)
@@ -833,18 +926,26 @@ async function renderTracks() {
   const out = [h('div', { class: 'card' },
     btn('Import GPX / KML files', () => input.click(), 'primary big'), input,
     toggleRow('These are TET / ACT files', app.markTet, (on) => { app.markTet = on; }),
+    btn('Draw a road on the map', startDraw, 'big'),
+    h('p', { class: 'note' }, 'For a road you know that no map has: tap along it on the imagery. It joins the network, so Plan and '
+      + 'Investigate can use it.'),
     h('p', { class: 'note' }, 'Tracks stay on this phone. TET and ACT files are for your own use only: their terms forbid sharing them.'))];
 
   if (!app.tracks.length) out.push(h('p', { class: 'note' }, 'No tracks yet.'));
   for (const t of app.tracks) {
     const lines = trackLines(t).length;
-    const kind = { import: 'imported', tet: 'TET / ACT', recording: 'my ride' }[t.kind] ?? t.kind;
+    const kind = { import: 'imported', tet: 'TET / ACT', recording: 'my ride', drawn: 'my road', planned: 'plan' }[t.kind] ?? t.kind;
     out.push(h('div', { class: 'card track' },
       h('div', { class: 'row' },
         h('input', { type: 'checkbox', checked: t.visible, 'aria-label': 'Show on map', onchange: async (e) => { await updateTrack(t.id, { visible: e.target.checked }); await app.refreshTracks(); } }),
         h('i', { class: 'swatch', style: `background:${t.color}` }),
         h('span', { class: 'grow name' }, t.name),
         h('span', { class: 'badge' }, kind)),
+      lines ? toggleRow('Use as a road in Plan & Investigate', !!t.network, async (on) => {
+        await updateTrack(t.id, { network: on });
+        await app.refreshTracks();
+        app.graph = null;
+      }) : null,
       h('div', { class: 'note' }, [
         lines ? fmtDist(t.stats.length) : null,
         t.stats.points ? `${t.stats.points} waypoints` : null,
@@ -863,6 +964,7 @@ async function renderTracks() {
           if (!confirm(`Delete "${t.name}" from this phone?`)) return;
           await deleteTrack(t.id);
           await app.refreshTracks();
+          if (t.network) app.graph = null;
           rerender();
         }, 'danger-text'),
       )));
@@ -1069,6 +1171,7 @@ async function renderMore() {
 export function initUI(appState) {
   app = appState;
   app.dlForm = { sources: ['ms-earth', 'dem'], areaType: 'bbox', trackId: null, buffer: 300, zmin: 10, zmax: 16 };
+  if (app.debug) app.debug.ensureGraph = ensureGraph;          // for the e2e tests
   app.plan = { startMode: 'gps', start: null, length: 4, shape: 'loop', climbs: 1, minClimbGrade: 15, avoidRed: true,
     preferDirt: true, allowNoAccess: false, results: [], sel: 0, busy: false, seed: 1 };
   app.markTet = false;
@@ -1079,6 +1182,9 @@ export function initUI(appState) {
     b.addEventListener('click', () => (current === b.dataset.sheet ? closePanel() : openPanel(b.dataset.sheet)));
   }
   $('sheet-close').addEventListener('click', closePanel);
+  $('draw-undo').addEventListener('click', () => { app.draw?.coords.pop(); app.draw?.snapped.pop(); if (app.draw) updateDrawBar(); });
+  $('draw-cancel').addEventListener('click', endDraw);
+  $('draw-save').addEventListener('click', saveDraw);
   $('btn-locate').addEventListener('click', locate);
   $('btn-record').addEventListener('click', () => (current === 'record' ? closePanel() : openPanel('record')));
   $('st-gps').addEventListener('click', () => openPanel('record'));
