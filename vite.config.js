@@ -26,7 +26,8 @@ function serviceWorker() {
     enforce: 'post',
     generateBundle(_, bundle) {
       const files = new Set([...Object.keys(bundle), ...listFiles(publicDir), 'index.html']);
-      const list = [...files].filter((f) => !f.endsWith('.map') && f !== 'sw.js').sort();
+      // pack/ (the area pack, tens of MB) is downloaded on request, not precached with the app shell
+      const list = [...files].filter((f) => !f.endsWith('.map') && f !== 'sw.js' && !f.startsWith('pack/')).sort();
       const hash = createHash('sha256');
       for (const f of list) {
         hash.update(f);

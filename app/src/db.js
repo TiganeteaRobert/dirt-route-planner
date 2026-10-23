@@ -4,9 +4,10 @@
 //   tracks     {id, name, kind, color, visible, fc, stats, ...}
 //   recpoints  [r, i] -> {r, i, t, lat, lon, ele, acc, spd}
 //   jobs       {id, ...download job}
+//   packs      'area' | 'dem' -> {blob, version, bytes, saved} (the installed area pack)
 
 const DB_NAME = 'dirtscout';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let dbp = null;
 
 export function openDB() {
@@ -20,6 +21,7 @@ export function openDB() {
         if (!db.objectStoreNames.contains('tracks')) db.createObjectStore('tracks', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('recpoints')) db.createObjectStore('recpoints', { keyPath: ['r', 'i'] });
         if (!db.objectStoreNames.contains('jobs')) db.createObjectStore('jobs', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('packs')) db.createObjectStore('packs');          // v2: area pack files
       };
       req.onsuccess = () => {
         req.result.onversionchange = () => req.result.close();

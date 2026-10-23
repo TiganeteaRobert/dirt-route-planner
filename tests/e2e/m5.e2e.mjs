@@ -1,0 +1,86 @@
+// M5 end-to-end check (investigate a track) in the PC's Chrome as an Android phone: install the area pack, go offline,
+// import a test GPX (private/test/baisoara-test.gpx, from tools/make_test_gpx.mjs), investigate it.
+//   npm run build && node tests/e2e/m5.e2e.mjs
+import { chromium } from 'playwright-core';
+import { preview } from 'vite';
+import { mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const OUT = join(ROOT, 'tests', 'e2e', 'out-m5');
+mkdirSync(OUT, { recursive: true });
+const server = process.env.E2E_URL ? null : await preview({ configFile: join(ROOT, 'vite.config.js'), preview: { port: 4173, strictPort: true } });
+const URL0 = process.env.E2E_URL || 'http://localhost:4173/';
+const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+const context = await browser.newContext({
+  viewport: { width: 412, height: 915 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, acceptDownloads: true,
+});
+const page = await context.newPage();
+const errors = [];
+page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
+page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+let step = 0;
+const shot = async (name) => {
+  const f = join(OUT, `${String(++step).padStart(2, '0')}-${name}.png`);
+  await page.screenshot({ path: f });
+  console.log('shot', f);
+};
+const settle = (ms = 800) => page.waitForTimeout(ms);
+const click = (sel) => page.locator(sel).first().click();
+const tilesLoaded = () => page.waitForFunction(() => {
+  const m = window.dirtscout?.map;
+  return m && m.loaded() && m.areTilesLoaded();
+}, null, { timeout: 60000 }).catch(() => console.log('  (tiles still loading)'));
+
+try {
+  await page.goto(URL0);
+  await page.waitForFunction(() => window.dirtscout?.map?.loaded(), null, { timeout: 60000 });
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await click('#toolbar [data-sheet="downloads"]');
+  await page.getByText('Install the area pack').first().waitFor({ timeout: 20000 });
+  await click('text=Install the area pack');
+  for (let i = 0; i < 180; i++) {
+    if (await page.evaluate(async () => !!(await window.dirtscout.debug.db.get('packs', 'graph')))) break;
+    await settle(1000);
+  }
+  await click('#sheet-close');
+
+  await context.setOffline(true);
+  await page.reload();
+  await page.waitForFunction(() => window.dirtscout?.map?.loaded(), null, { timeout: 60000 });
+  await page.evaluate(() => {
+    const a = window.dirtscout;
+    a.debug.settings.base = 'ds-topo';
+    a.debug.applyLayers(a.map);
+    a.map.jumpTo({ center: [23.47, 46.58], zoom: 13 });
+  });
+  await tilesLoaded();
+  await click('#toolbar [data-sheet="tracks"]');
+  await page.locator('#sheet-body input[type=file]').setInputFiles(join(ROOT, 'private', 'test', 'baisoara-test.gpx'));
+  await page.waitForFunction(() => window.dirtscout.tracks.length >= 1, null, { timeout: 10000 });
+  await settle(600);
+  const t0 = Date.now();
+  await page.getByRole('button', { name: 'Investigate' }).first().click();
+  await page.waitForFunction(() => window.dirtscout.inv && !window.dirtscout.inv.busy, null, { timeout: 60000 });
+  console.log(`investigation took ${Date.now() - t0} ms; verdict`, await page.evaluate(() => window.dirtscout.inv.result?.verdict),
+    'stretches', await page.evaluate(() => window.dirtscout.inv.result?.stretches.length));
+  await tilesLoaded(); await settle(1500);
+  await shot('investigate-panel');
+  await page.locator('.sheet-body').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await settle(300);
+  await shot('investigate-panel-bottom');
+  await page.locator('.find').first().click();
+  await tilesLoaded(); await settle(1500);
+  await click('#sheet-close');
+  await settle(500);
+  await shot('investigate-flyto-stretch');
+} catch (e) {
+  console.error('E2E FAILED:', e.message);
+  await shot('failure').catch(() => {});
+  process.exitCode = 1;
+} finally {
+  console.log(errors.length ? `console errors (${errors.length}):\n  ${errors.join('\n  ')}` : 'console errors: none');
+  await browser.close();
+  await server?.close();
+}

@@ -70,6 +70,17 @@ export async function saveRecording(rec, name) {
   return track;
 }
 
+// Saves a generated route as a track (kind 'planned').
+export async function savePlanned(name, coords, stats, opts, color) {
+  const fc = { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { name, kind: 'trk' }, geometry: { type: 'LineString', coordinates: coords } }] };
+  const track = {
+    id: `plan-${Date.now().toString(36)}`, name, kind: 'planned', color: color ?? '#00e5ff', visible: true, created: Date.now(),
+    fc, stats: { ...statsOf(fc), up: stats.up, dn: stats.dn, climbs: stats.climbs.length, green: stats.green, yellow: stats.yellow, red: stats.red }, plan: opts,
+  };
+  await db.put('tracks', track);
+  return track;
+}
+
 export async function updateTrack(id, patch) {
   const t = await db.get('tracks', id);
   if (!t) return null;

@@ -5,7 +5,7 @@ south to Aiud. An installable web app for Android (Chrome), built to work in air
 
 **App:** https://tiganetearobert.github.io/dirt-route-planner/
 
-## What it does (M1)
+## What it does
 
 - **Maps:** Microsoft Earth (Bing aerial), Microsoft Hybrid and Esri World Imagery, which you can save to the phone. OpenStreetMap,
   OpenTopoMap and CyclOSM are online only.
@@ -20,13 +20,35 @@ south to Aiud. An installable web app for Android (Chrome), built to work in air
 - **Tracks:** import GPX/KML files (Wikiloc, TET, ACT, your own). Every track stays on the phone.
 - **Checks:** a source check (one tile per map server) and device checks (installed, offline-ready, storage protected,
   keep-screen-on, location permission).
+- **Area pack (M2):** DirtScout's own map, built on the PC from open data (`pipeline/`): a topo base (forest, water,
+  villages, 20 m contours, peaks, springs, huts, gates and fords) and every track and path with its evidence. The
+  evidence is:
+  - seen from above (Microsoft road detections),
+  - public GPS traces,
+  - tree cover,
+  - steepness from bare-earth elevation (FABDEM),
+  - hiking/MTB route membership, access tags and OSM edit history.
+
+  Tracks can be coloured by each piece of evidence. Tap a track to see everything known about it. It is about 40 MB and
+  installs in the Offline panel to work in airplane mode.
+- **Risk colours (M3):** every track gets a verdict (likely fine / uncertain or demanding / doubtful or hard), plus a
+  flag where motors are not allowed. Its reasons show in the track card. The weights are a starting point, to be tuned
+  with real rides.
+- **Plan (M4):** "a 4 km loop with some hill climbs" from your position, the map centre or a tapped point. You can
+  ask for a loop or an out-and-back ride, 2-60 km, 0-3 climbs steeper than 12-25 %, with red tracks avoided and dirt
+  preferred over tarmac. It returns up to five different routes with climb, dirt share and risk mix, to show, save
+  or export as GPX. Ten sample rides around Cluj come with the area pack for your review.
+- **Investigate (M5):** on any track (Wikiloc, TET, a plan, your ride), DirtScout map-matches it to the network. It
+  colours each stretch (fine / doubtful / not on any mapped way), lists climbs, steep descents and risky stretches with
+  km markers, and finds ways around the red stretches. On the PC, `tools/investigate.mjs` and
+  `tools/imagery_crops.py` add an imagery check of the flagged stretches.
 
 ## Install on Android
 
 1. Open the app link in **Chrome**.
 2. Tap menu ⋮ → **Install app** (or "Add to Home screen"), or use the Install button under More.
-3. Open DirtScout from the home screen. Go to Offline → **Whole area overview** → Start download (about 0.6-0.8 GB on
-   Wi-Fi).
+3. Open DirtScout from the home screen. Go to Offline → **Install the area pack** (about 50 MB), then **Whole area
+   overview** → Start download (about 0.6-0.8 GB of imagery, on Wi-Fi).
 4. For riding detail, import a track and use **Save detail offline** on it (z17-18 along the track).
 5. Test in airplane mode: the app opens and shows the saved imagery, slope and your GPS position.
 
@@ -39,7 +61,9 @@ Keep DirtScout on screen while riding. Android can pause web-app GPS when the sc
 | Microsoft Earth / Hybrid (Bing Maps) | Can be saved for personal use. Bing's terms do not allow caching; the owner accepted that risk. Never shared. |
 | Esri World Imagery | Same as Bing. Esri's terms only allow offline use through Esri's own apps; the owner accepted that risk. |
 | OpenStreetMap, OpenTopoMap, CyclOSM, Waymarked Trails, OSM GPS traces | Online only. Their volunteer servers forbid bulk or offline download. |
-| Terrain Tiles (Mapzen/Tilezen on AWS Open Data) | Elevation for hillshade and slope. Open data. |
+| FABDEM (bare-earth Copernicus DEM, University of Bristol) | Elevation in the area pack: hillshade, slope, contours, grades. CC BY-NC-SA 4.0 (non-commercial). |
+| Terrain Tiles (Mapzen/Tilezen on AWS Open Data) | Elevation outside the area pack. Open data. |
+| Microsoft Road Detections, ESA WorldCover, OSM GPS traces | Evidence in the area pack. ODbL / CC BY 4.0. |
 | TET / ACT GPX | Imported on the phone only. Their terms forbid redistribution, so they never enter this repository. |
 
 The elevation model has ~25-30 m pixels. Short steep pitches (10-20 m) do not show in the slope shading, so a clear
@@ -52,14 +76,20 @@ npm install
 npm run dev        # http://localhost:5173
 npm test           # unit tests (core/: tile math, corridors, GPX/KML)
 npm run e2e        # build + phone emulation in the local Chrome (download, airplane mode, GPS, recording, import)
+node tests/e2e/m2.e2e.mjs   # area pack; m4 = Plan, m5 = Investigate (all take E2E_URL=https://... for the live site)
+node tools/investigate.mjs track.gpx          # report + ways around in private/reports/<name>/
+uv run --with pillow python tools/imagery_crops.py private/reports/<name>   # imagery of the flagged stretches
 ```
 
-- `core/`: plain ES modules with no DOM, shared by the app and the Node data pipeline.
-- `app/`: the PWA (MapLibre GL JS 6, IndexedDB tile store, service worker).
+- `core/`: plain ES modules with no DOM, shared by the app and the Node data pipeline (tile math, GPX, scoring).
+- `app/`: the PWA (MapLibre GL JS 6, IndexedDB tile store, service worker, PMTiles area pack).
+- `pipeline/`: builds the area pack from open data; see [pipeline/README.md](pipeline/README.md).
 
 Pushing to `main` deploys to GitHub Pages.
 
-Roadmap: M2 area pack (own OSM track map, Microsoft road detections, GPS traces, land cover), M3 scoring and risk
-colours, M4 route generator, M5 "investigate this track", M6 a batch of 100 tracks.
+Roadmap: tune the risk colours and route costs with real rides, then M6, a batch of 100 tracks (`tools/samples.mjs`
+already makes the review set).
 
-Map data © OpenStreetMap contributors (ODbL). Imagery © Microsoft, © Esri and its providers.
+Map data © OpenStreetMap contributors (ODbL). Imagery © Microsoft, © Esri and its providers. Road detections ©
+Microsoft (ODbL). WorldCover © ESA 2021 (CC BY 4.0). Elevation: FABDEM V1-2 © University of Bristol (CC BY-NC-SA 4.0).
+Fonts: Noto Sans (SIL OFL 1.1).

@@ -5,6 +5,7 @@ import { addProtocol } from 'maplibre-gl';
 import { SOURCES, SLOPE_CLASSES } from './config.js';
 import { settings } from './settings.js';
 import * as db from './db.js';
+import { packTile } from './pack.js';
 import { fillTemplate, tileKey, terrariumElevation, lon2x, lat2y, y2lat, metersPerPixel } from '../../core/tilemath.js';
 
 // ---- network state: a tiny circuit breaker so a dead connection in the mountains does not stall every tile ----
@@ -90,6 +91,10 @@ async function offlineTile(params, abort) {
   const src = m[1], z = +m[2], x = +m[3], y = +m[4];
   const s = SOURCES[src];
   const key = tileKey(src, z, x, y);
+  if (src === 'dem') {                      // the area pack's bare-earth elevation comes first
+    const d = await packTile('dem', z, x, y, abort.signal);
+    if (d) return { data: d };
+  }
   const rec = await db.getTile(key);
   if (rec?.b) return { data: await rec.b.arrayBuffer() };
   if (!rec && networkAllowed()) {
@@ -116,6 +121,8 @@ const demCache = new Map();          // 'z/x/y' -> Promise<Float32Array | null>
 const DEM_CACHE_MAX = 48;
 
 async function demBlob(z, x, y, signal) {
+  const packed = await packTile('dem', z, x, y, signal);
+  if (packed) return new Blob([packed], { type: 'image/png' });
   const rec = await db.getTile(tileKey('dem', z, x, y));
   if (rec?.b) return rec.b;
   if (rec || !networkAllowed()) return null;
@@ -270,6 +277,12 @@ async function slopeTile(params, abort) {
     }
   }
   return { data: await createImageBitmap(img) };
+}
+
+// Forget decoded elevation (after the area pack changes).
+export function clearDemCaches() {
+  demCache.clear();
+  slopeCache.clear();
 }
 
 export function registerProtocols() {

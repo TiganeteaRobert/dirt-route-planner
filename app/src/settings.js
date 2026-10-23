@@ -13,7 +13,15 @@ const DEFAULTS = {
     'wmt-mtb': { on: false, opacity: 0.9 },
     'wmt-hiking': { on: false, opacity: 0.9 },
     'osm-gps': { on: false, opacity: 0.8 },
+    'ds-tracks': { on: true, opacity: 1 },
+    'ds-pois': { on: true, opacity: 1 },
+    'ds-places': { on: true, opacity: 1 },
+    'ds-routes': { on: false, opacity: 0.55 },
+    'ds-detections': { on: false, opacity: 0.85 },
+    'ds-contours': { on: false, opacity: 1 },
+    'ds-protected': { on: false, opacity: 1 },
   },
+  colorBy: 'risk',            // how the DirtScout tracks are coloured (see dsstyle.js COLOR_MODES)
   units: 'metric',
   bingHost: 'tiles',          // 'tiles' = tiles.virtualearth.net, 'ecn' = ecn.t0-3.tiles.virtualearth.net
   saveBrowse: false,          // also store tiles seen while browsing online

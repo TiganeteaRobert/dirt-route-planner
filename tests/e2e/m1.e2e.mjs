@@ -11,8 +11,8 @@ const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const OUT = join(ROOT, 'tests', 'e2e', 'out');
 mkdirSync(OUT, { recursive: true });
 
-const server = await preview({ configFile: join(ROOT, 'vite.config.js'), preview: { port: 4173, strictPort: true } });
-const URL0 = 'http://localhost:4173/';
+const server = process.env.E2E_URL ? null : await preview({ configFile: join(ROOT, 'vite.config.js'), preview: { port: 4173, strictPort: true } });
+const URL0 = process.env.E2E_URL || 'http://localhost:4173/';
 const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 const context = await browser.newContext({
   viewport: { width: 412, height: 915 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
@@ -152,5 +152,5 @@ try {
 } finally {
   console.log(errors.length ? `console errors (${errors.length}):\n  ${errors.join('\n  ')}` : 'console errors: none');
   await browser.close();
-  await server.close();
+  await server?.close();
 }

@@ -4,11 +4,17 @@ Offline dirt-bike route planner PWA for one riding area (Cluj-Napoca / Apuseni).
 and the research live in `private/HANDOFF.md` (gitignored). Read it before starting a milestone.
 
 ## Layout
-- `core/`: no-DOM ES modules shared by the app and Node (tilemath, geo, area = tile sets/corridors, gpx).
+- `core/`: no-DOM ES modules shared by the app and Node: tilemath, geo, area (tile sets/corridors), gpx, scoring
+  (M3 verdicts), routing (M4: A*, loops with climbs), investigate (M5: map matching, profile, ways around), polyline.
 - `app/`: Vite root. `src/` = main, config (sources, area), settings (localStorage), db (IndexedDB), tiles
   (`offline://` and `slope://` protocols, overzoom, elevation), downloads (job queue), gps (position + recorder),
   tracks, mapview, ui (panels). `sw.js` is the app-shell worker; the build fills in its precache list.
-- `tests/`: `node --test` unit tests; `tests/e2e/m1.e2e.mjs` = phone emulation in the local Chrome (playwright-core).
+- `tests/`: `node --test` unit tests; `tests/e2e/m1.e2e.mjs` (offline map) and `m2.e2e.mjs` (area pack) = phone
+  emulation in the local Chrome (playwright-core). The browser pane cannot screenshot while the app window is hidden:
+  use these.
+- `pipeline/`: builds the area pack (README there). Grades use FABDEM, smoothed over 30 m; the noise was measured on
+  main roads (p90 ~10 %). `core/scoring.js` is used both by `pipeline/score.mjs` and by the phone's track card.
+- The area pack is published as a `pack-*` GitHub release (not committed); the Pages workflow copies the newest one in.
 - `data/` (raw downloads, area pack) and `private/` are gitignored.
 
 ## Rules (binding unless the owner changes them)
@@ -21,4 +27,13 @@ and the research live in `private/HANDOFF.md` (gitignored). Read it before start
 - The repo is public: no personal data, no GPX, no imagery in commits.
 
 ## Commands
-`npm run dev` | `npm test` | `npm run e2e` | push to `main` = deploy to https://tiganetearobert.github.io/dirt-route-planner/
+`npm run dev` | `npm test` | `npm run e2e` | `node tests/e2e/m2.e2e.mjs` | push to `main` = deploy to
+https://tiganetearobert.github.io/dirt-route-planner/
+
+## Status
+M1-M5 are built and tested on the PC (tests/e2e/m1, m2, m4, m5) and deployed. They wait for the owner's phone test
+and feedback. The risk weights (core/scoring.js) and the route costs (core/routing.js) are first calibrations. The ten
+sample rides (tools/samples.mjs -> pack samples.json) are the review set before M6 (100 tracks).
+When the owner asks to "investigate" a GPX: `node tools/investigate.mjs <gpx>`, then
+`uv run --with pillow python tools/imagery_crops.py private/reports/<name>`, look at the flag-*.jpg images, and report
+the verdict, risks with km markers and ways around. The imagery stays local (terms).

@@ -1,13 +1,19 @@
 // Panels (one bottom sheet at a time), the toolbar, status pills and toasts.
-import { SOURCES, LOCAL_OVERLAYS, SLOPE_CLASSES, OFFLINE_SOURCES, APP_NAME } from './config.js';
+import { SOURCES, LOCAL_OVERLAYS, SLOPE_CLASSES, OFFLINE_SOURCES, APP_NAME, DS_BASE, DS_OVERLAY_LIST } from './config.js';
 import { settings, saveSettings, defaultArea } from './settings.js';
-import { applyLayers, setArea, effectiveBase, setRecLine } from './mapview.js';
+import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation } from './mapview.js';
+import { buildIndex, investigate } from '../../core/investigate.js';
+import { COLOR_MODES, DS_TRACK_LAYERS } from './dsstyle.js';
+import { scoreEdge } from '../../core/scoring.js';
+import { installed as packInstalled, fetchManifest, install as installPack, uninstall as uninstallPack, loadGraphJson, loadPackJson, PACK_FILES } from './pack.js';
+import { decodePolyline } from '../../core/polyline.js';
+import { loadGraph, nearestNode, generateRoutes, routeCoords, haversine } from '../../core/routing.js';
 import { downloader, estimateJob, sourceZooms } from './downloads.js';
 import * as db from './db.js';
 import { gps, recorder } from './gps.js';
 import * as wake from './wakelock.js';
-import { importFiles, updateTrack, deleteTrack, shareGPX, trackLines, saveRecording } from './tracks.js';
-import { upstreamURL, networkAllowed, elevationAt } from './tiles.js';
+import { importFiles, updateTrack, deleteTrack, shareGPX, trackLines, saveRecording, savePlanned } from './tracks.js';
+import { upstreamURL, networkAllowed, elevationAt, clearDemCaches } from './tiles.js';
 import { h, fill, fmtDist, fmtSpeed, fmtElev, fmtBytes, fmtInt, fmtDuration } from './format.js';
 import { metersPerPixel, lon2x, lat2y, tileKey } from '../../core/tilemath.js';
 import { bboxIntersect, bboxSizeKm } from '../../core/geo.js';
@@ -24,7 +30,10 @@ const PANELS = {
   downloads: ['Offline maps', renderDownloads],
   tracks: ['Tracks', renderTracks],
   record: ['Ride', renderRecord],
+  plan: ['Plan a ride', renderPlan],
+  inv: ['Investigate', renderInvestigation],
   more: ['More', renderMore],
+  info: ['Track info', renderInfo],
 };
 
 // ---------------------------------------------------------------- sheet, toast, status
@@ -39,6 +48,7 @@ export function openPanel(name) {
 }
 
 export function closePanel() {
+  if (current === 'info') { setSelected(app.map, null); app.selected = null; }
   current = null;
   $('sheet').hidden = true;
   for (const b of document.querySelectorAll('#toolbar [data-sheet]')) b.classList.remove('active');
@@ -117,6 +127,13 @@ const mpp = (z) => {
 async function renderLayers() {
   const out = [h('h3', {}, 'Base map')];
   const online = networkAllowed();
+  out.push(h('label', { class: `row${packUsable() ? '' : ' dim'}` },
+    h('input', {
+      type: 'radio', name: 'base', checked: settings.base === DS_BASE.id,
+      onchange: () => { settings.base = DS_BASE.id; saveSettings(); applyLayers(app.map); rerender(); },
+    }),
+    h('span', { class: 'grow' }, DS_BASE.name),
+    h('span', { class: `badge${packInstalled.area ? ' ok' : ' online'}` }, packInstalled.area ? 'on phone' : 'online until installed')));
   for (const id of BASES) {
     const s = SOURCES[id];
     const st = app.stats[id];
@@ -130,6 +147,27 @@ async function renderLayers() {
       h('span', { class: `badge${s.offline ? (st?.count ? ' ok' : '') : ' online'}` }, badge)));
   }
   if (effectiveBase() !== settings.base) out.push(h('p', { class: 'note warn' }, 'No network: showing Microsoft Earth instead.'));
+
+  out.push(h('h3', {}, 'DirtScout map (area pack)'));
+  if (!packInstalled.area) {
+    out.push(h('p', { class: 'note' }, online
+      ? 'Loaded from the internet now. Install the area pack in Offline to use it with no network.'
+      : 'Install the area pack (Offline) to see the DirtScout map with no network.'));
+  }
+  for (const [id, name, sliderLabel] of DS_OVERLAY_LIST) {
+    const o = settings.overlays[id];
+    out.push(h('div', { class: 'block' },
+      h('label', { class: `row${packUsable() ? '' : ' dim'}` },
+        h('input', { type: 'checkbox', checked: o.on, onchange: (e) => { o.on = e.target.checked; saveSettings(); applyLayers(app.map); rerender(); } }),
+        h('span', { class: 'grow' }, name)),
+      o.on && sliderLabel ? h('label', { class: 'slider' }, h('span', {}, sliderLabel),
+        h('input', {
+          type: 'range', min: 0.1, max: 1, step: 0.05, value: o.opacity,
+          oninput: (e) => { o.opacity = +e.target.value; applyLayers(app.map); }, onchange: () => saveSettings(),
+        })) : null,
+      id === 'ds-tracks' && o.on ? colorByControl() : null,
+    ));
+  }
 
   out.push(h('h3', {}, 'Overlays'));
   const items = [
@@ -161,6 +199,365 @@ async function renderLayers() {
   }
   out.push(h('p', { class: 'note' }, 'Coming with the area pack: DirtScout track map from OSM data, Microsoft road detections, routes coloured by risk.'));
   return out;
+}
+
+function colorByControl() {
+  const mode = COLOR_MODES[settings.colorBy] ?? COLOR_MODES.type;
+  return h('div', { class: 'indent' },
+    h('label', { class: 'row' }, h('span', { class: 'grow' }, 'Colour by'),
+      h('select', { onchange: (e) => { settings.colorBy = e.target.value; saveSettings(); applyLayers(app.map); rerender(); } },
+        Object.entries(COLOR_MODES).map(([k, m]) => h('option', { value: k, selected: settings.colorBy === k }, m.name)))),
+    h('div', { class: 'legend' }, mode.legend.map(([c, label]) => h('span', { class: 'legend-item' }, h('i', { style: `background:${c}` }), label))),
+    mode.note ? h('p', { class: 'note' }, mode.note) : null,
+    h('p', { class: 'note' }, 'Tap a track on the map to see everything known about it.'));
+}
+
+// ---------------------------------------------------------------- Track info (tap on the map)
+
+const CLASS_NAMES = { track: 'Track', path: 'Path', bridleway: 'Bridleway', footway: 'Footway (no motors)', cycleway: 'Cycleway',
+  steps: 'Steps', unclassified: 'Minor road', residential: 'Village street', service: 'Service road', tertiary: 'Tertiary road',
+  secondary: 'Secondary road', primary: 'Primary road', trunk: 'Trunk road', motorway: 'Motorway', living_street: 'Living street' };
+const SAC = { hiking: 'T1 hiking', mountain_hiking: 'T2 mountain hiking', demanding_mountain_hiking: 'T3 demanding',
+  alpine_hiking: 'T4 alpine', demanding_alpine_hiking: 'T5 demanding alpine', difficult_alpine_hiking: 'T6 difficult alpine' };
+
+const kv = (k, v) => (v == null || v === '' ? null : h('div', { class: 'kv' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, String(v))));
+
+function renderInfo() {
+  const f = app.selected;
+  if (!f) return [h('p', { class: 'note' }, 'Tap a track, path or point on the map.')];
+  const p = f.properties;
+  if (f.layer?.id === 'ds-pois') {
+    return [
+      h('h3', {}, `${(p.kind ?? '').replace(/_/g, ' ')}${p.class === 'barrier' ? ' (barrier)' : ''}`),
+      kv('Name', p.name), kv('Elevation', p.ele != null ? fmtElev(p.ele) : null),
+      p.id ? h('a', { class: 'btn', href: `https://www.openstreetmap.org/node/${p.id}`, target: '_blank', rel: 'noopener' }, 'Open in OpenStreetMap') : null,
+    ];
+  }
+  const grade = p.g100 ?? p.g50 ?? p.gall;
+  const gradeWin = p.g100 != null ? '100 m' : p.g50 != null ? '50 m' : 'the whole piece';
+  const way = String(p.id ?? '').split(':')[0];
+  const per100 = p.tp != null && p.len ? p.tp / Math.max(0.1, p.len / 100) : null;
+  const out = [
+    h('h3', {}, `${CLASS_NAMES[p.class] ?? p.class}${p.tt ? ` · grade ${p.tt}` : ''}${p.name ? ` · ${p.name}` : ''}`),
+    kv('This piece', p.len != null ? `${fmtDist(p.len)} (between junctions)` : null),
+    kv('Ref', p.ref), kv('Surface', p.surf), kv('Smoothness', p.smooth), kv('Hiking scale', SAC[p.sac] ?? p.sac),
+    kv('MTB scale', p.mtb), kv('Trail visibility', p.vis), kv('4WD only', p.fwd), kv('Motor access', p.acc ?? 'not tagged'),
+    kv('Gates / barriers on it', p.bar), kv('Ford', p.ford ? 'yes' : null), kv('Bridge', p.bridge ? 'yes' : null),
+  ];
+  if (p.det != null) {
+    const s = scoreEdge(p);
+    const verdict = { green: 'Likely fine', yellow: 'Uncertain or demanding', red: 'Doubtful or hard' }[s.name];
+    out.splice(1, 0, h('div', { class: `verdict v-${s.name}` },
+      h('strong', {}, verdict),
+      h('span', {}, ` · exists ${Math.round(s.exists * 100)} %${s.legal === 'no' ? ' · motors not allowed (OSM)' : s.legal === 'restricted' ? ' · motor access restricted' : ''}`)),
+    h('ul', { class: 'reasons' }, s.reasons.map((r) => h('li', { class: `r-${typeof r.d === 'number' ? (r.d > 0 ? 'plus' : 'zero') : r.d}` },
+      r.text, typeof r.d === 'number' && r.d > 0 ? ` (+${Math.round(r.d * 100)})` : ''))));
+    out.push(h('h3', {}, 'Evidence'),
+      kv('Seen from above', `${Math.round(p.det * 100)} % of it near a Microsoft road detection`),
+      kv('GPS traces (OSM)', `${p.tp} points${p.tn ? `, ${p.tn} traces` : ''}${per100 != null ? ` (${per100.toFixed(1)} per 100 m)` : ''}`),
+      kv('Forest around it', `${Math.round((p.tree ?? 0) * 100)} % tree cover`),
+      kv('Steepest', grade != null ? `about ${Math.round(grade)} % over ${gradeWin}` : null),
+      kv('Climb along the drawn line', p.up != null ? `up ${Math.round(p.up)} m, down ${Math.round(p.dn)} m` : null),
+      kv('Protected area', p.prot ? 'yes' : null), kv('On marked routes', p.routes),
+      kv('OSM edits', [p.ver ? `version ${p.ver}` : null, p.yr ? `last edited ${p.yr}` : null, p.src ? `source: ${p.src}` : null].filter(Boolean).join(', ')),
+      h('p', { class: 'note' }, 'Grades come from a 30 m elevation model: a short steep pitch can hide inside a gentle number.'));
+  }
+  if (way) out.push(h('a', { class: 'btn', href: `https://www.openstreetmap.org/way/${way}`, target: '_blank', rel: 'noopener' }, 'Open in OpenStreetMap'));
+  return out;
+}
+
+function onMapClick(e) {
+  if (app.planPick) {
+    app.planPick = false;
+    app.plan.start = [e.lngLat.lng, e.lngLat.lat];
+    app.plan.startMode = 'tap';
+    drawPlan();
+    openPanel('plan');
+    return;
+  }
+  const pad = 14;
+  const box = [[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]];
+  const layers = ['ds-pois', ...DS_TRACK_LAYERS].filter((l) => app.map.getLayer(l) && app.map.getLayoutProperty(l, 'visibility') === 'visible');
+  const hits = layers.length ? app.map.queryRenderedFeatures(box, { layers }) : [];
+  if (!hits.length) {
+    if (current === 'info') closePanel();
+    return;
+  }
+  const poi = hits.find((f) => f.layer.id === 'ds-pois');
+  const routable = hits.find((f) => f.properties.det != null);
+  const f = poi ?? routable ?? hits[0];
+  app.selected = f;
+  setSelected(app.map, f.layer.id === 'ds-pois' ? null : f.properties.id);
+  openPanel('info');
+}
+
+// ---------------------------------------------------------------- Investigate a track (M5)
+
+const RISK_COLORS = ['#00e676', '#ffd600', '#ff1744'];
+const UNMAPPED = '#e040fb';
+
+async function ensureGraph() {
+  if (!app.graph) {
+    const json = await loadGraphJson();
+    if (!json) throw new Error('the route network is not on this phone: install the area pack (Offline) or go online');
+    app.graph = loadGraph(json);
+    app.graphIndex = null;
+  }
+  if (!app.graphIndex) app.graphIndex = buildIndex(app.graph);
+  return app.graph;
+}
+
+async function runInvestigation(t) {
+  app.inv = { track: t, busy: true, result: null };
+  openPanel('inv');
+  try {
+    const G = await ensureGraph();
+    const coords = trackLines(t).flat();
+    const res = await investigate(G, app.graphIndex, coords, { elevAt: elevationAt });
+    app.inv.result = res;
+    const P = res.points;
+    const features = res.segments.map((s) => ({
+      type: 'Feature', properties: { color: s.e === null ? UNMAPPED : RISK_COLORS[s.risk] },
+      geometry: { type: 'LineString', coordinates: P.slice(s.start, s.end + 2) },
+    })).filter((f) => f.geometry.coordinates.length > 1);
+    for (const a of res.alternatives) features.push({ type: 'Feature', properties: { alt: 1 }, geometry: { type: 'LineString', coordinates: a.coords } });
+    setInvestigation(app.map, { type: 'FeatureCollection', features });
+    fitCoords(P);
+  } catch (e) {
+    toast(`Cannot investigate: ${e.message}`, { ms: 7000 });
+  } finally {
+    app.inv.busy = false;
+    rerender();
+  }
+}
+
+function flyToKm(km) {
+  const r = app.inv?.result;
+  if (!r) return;
+  const i = r.dist.findIndex((d) => d >= km * 1000);
+  const p = r.points[Math.max(0, i)];
+  app.map.flyTo({ center: p, zoom: Math.max(app.map.getZoom(), 15.5), duration: 700 });
+}
+
+function renderInvestigation() {
+  const inv = app.inv;
+  if (!inv) return [h('p', { class: 'note' }, 'Open Tracks and tap Investigate on a track.')];
+  if (inv.busy) return [h('p', { class: 'note' }, `Checking "${inv.track.name}" against the area pack…`)];
+  const r = inv.result;
+  if (!r) return [h('p', { class: 'note' }, 'No result.')];
+  const km = (m) => (m / 1000).toFixed(2);
+  const pct = (x) => `${Math.round(x * 100)} %`;
+  const head = { green: 'Looks fine', yellow: 'Some doubts', red: 'Risky' }[r.verdict];
+  const out = [
+    h('h3', {}, inv.track.name),
+    h('div', { class: `verdict v-${r.verdict}` }, h('strong', {}, head),
+      h('span', {}, ` · ${fmtDist(r.length)}${r.profile ? ` · up ${fmtElev(r.profile.up)}` : ''}`)),
+    h('div', { class: 'riskbar' }, h('i', { style: `width:${r.shares.green * 100}%;background:#00c853` }),
+      h('i', { style: `width:${r.shares.yellow * 100}%;background:#ffd600` }), h('i', { style: `width:${r.shares.red * 100}%;background:#ff1744` }),
+      h('i', { style: `width:${r.shares.unmapped * 100}%;background:${UNMAPPED}` })),
+    h('div', { class: 'note' }, `green ${pct(r.shares.green)} · yellow ${pct(r.shares.yellow)} · red ${pct(r.shares.red)} · not on any mapped way ${pct(r.shares.unmapped)}`
+      + (r.shares.legalNo ? ` · closed to motors ${pct(r.shares.legalNo)}` : '')),
+  ];
+  const item = (from, to, text, cls = '') => h('button', { class: `row find ${cls}`, onclick: () => { flyToKm(from / 1000); } },
+    h('span', { class: 'km' }, `km ${km(from)}–${km(to)}`), h('span', { class: 'grow' }, text));
+  if (r.stretches.length) {
+    out.push(h('h3', {}, 'Risky stretches'));
+    for (const s of r.stretches) {
+      const why = [...new Set(s.parts.map((x) => (x.e === null ? 'not on any mapped way'
+        : `${x.cls}${x.name ? ` "${x.name}"` : ''}${x.legal === 2 ? ', closed to motors' : ''}${x.grade ? `, about ${Math.round(x.grade)} %` : ''}`)))];
+      out.push(item(s.from, s.to, why.join('; '), `k-${s.kind}`));
+    }
+  }
+  if (r.profile?.climbs.length) {
+    out.push(h('h3', {}, 'Climbs (15 %+)'));
+    for (const c of r.profile.climbs) out.push(item(c.from, c.to, `${Math.round(c.to - c.from)} m, average ${Math.round(c.avg)} %, steepest ${Math.round(c.max)} %`));
+  }
+  if (r.profile?.descents.length) {
+    out.push(h('h3', {}, 'Steep descents (20 %+)'));
+    for (const c of r.profile.descents) out.push(item(c.from, c.to, `steepest ${Math.round(c.max)} %`));
+  }
+  if (r.alternatives.length) {
+    out.push(h('h3', {}, 'Ways around (cyan dashes)'));
+    r.alternatives.forEach((a, i) => out.push(h('div', { class: 'card' },
+      h('div', {}, `km ${a.fromKm.toFixed(2)}–${a.toKm.toFixed(2)}: ${fmtDist(a.stats.len)} instead of ${fmtDist(a.original)} `
+        + `(${a.extra >= 0 ? '+' : ''}${fmtDist(Math.abs(a.extra))}), green ${pct(a.stats.green)}`),
+      h('div', { class: 'row-btns' },
+        btn('Show', () => { fitCoords(a.coords); closePanel(); }),
+        btn('Save', async () => {
+          const t = await savePlanned(`${inv.track.name} - way around ${i + 1}`, a.coords, a.stats, { around: inv.track.id }, '#00e5ff');
+          await app.refreshTracks();
+          toast('Saved in Tracks', { action: 'GPX', onAction: () => shareGPX(t) });
+        })))));
+  }
+  out.push(h('p', { class: 'note' }, 'Checked against OSM, Microsoft detections, GPS traces, forest and bare-earth elevation (30 m). '
+    + 'A track drawn more than 30 m from every mapped way counts as not mapped. Short steep pitches do not show. '
+    + 'Ask Claude on the PC for an imagery check of the red stretches.'));
+  out.push(btn('Clear from the map', () => { setInvestigation(app.map, { type: 'FeatureCollection', features: [] }); app.inv = null; closePanel(); }));
+  return out;
+}
+
+// ---------------------------------------------------------------- Plan a ride (M4)
+
+const PLAN_COLORS = ['#00e5ff', '#ff3df2', '#ffd400', '#7cff4f', '#ff9100'];
+
+function planStart() {
+  const p = app.plan;
+  if (p.startMode === 'gps' && gps.last) return [gps.last.lon, gps.last.lat];
+  if (p.startMode === 'tap' && p.start) return p.start;
+  const c = app.map.getCenter();
+  return [c.lng, c.lat];
+}
+
+function drawPlan() {
+  const p = app.plan;
+  const features = p.results.map((r, i) => ({
+    type: 'Feature', properties: { color: PLAN_COLORS[i % PLAN_COLORS.length], sel: i === p.sel ? 1 : 0 },
+    geometry: { type: 'LineString', coordinates: r.coords },
+  }));
+  const s = p.results.length ? p.results[0].coords[0] : (p.startMode === 'tap' && p.start ? p.start : null);
+  if (s) features.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: s } });
+  setPlan(app.map, { type: 'FeatureCollection', features });
+}
+
+function fitCoords(coords) {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const [x, y] of coords) { w = Math.min(w, x); s = Math.min(s, y); e = Math.max(e, x); n = Math.max(n, y); }
+  app.map.fitBounds([[w, s], [e, n]], { padding: { top: 60, bottom: Math.round(innerHeight * 0.5), left: 30, right: 60 }, maxZoom: 16, duration: 500 });
+}
+
+async function generatePlan() {
+  const p = app.plan;
+  if (p.busy) return;
+  p.busy = true;
+  rerender();
+  try {
+    const G = await ensureGraph();
+    const [lon, lat] = planStart();
+    const start = nearestNode(G, lon, lat);
+    const off = haversine(lon, lat, G.lon[start], G.lat[start]);
+    if (off > 3000) throw new Error(`the start is ${fmtDist(off)} from the nearest mapped way (outside the riding area?)`);
+    await new Promise((r) => setTimeout(r, 30));           // let the "working" state paint
+    const res = generateRoutes(G, start, {
+      length: p.length * 1000, shape: p.shape, climbs: p.climbs, minClimbGrade: p.minClimbGrade, avoidRed: p.avoidRed,
+      preferDirt: p.preferDirt, allowNoAccess: p.allowNoAccess, seed: p.seed,
+    });
+    p.results = res.map((r) => ({ ...r, coords: routeCoords(G, r.path) }));
+    p.sel = 0;
+    p.seed += 1;
+    drawPlan();
+    if (p.results.length) fitCoords(p.results[0].coords);
+    else toast('No route fits: try another length, fewer climbs, or allow yellow tracks.');
+  } catch (e) {
+    toast(`Cannot plan: ${e.message}`, { ms: 7000 });
+  } finally {
+    p.busy = false;
+    rerender();
+  }
+}
+
+function seg(options, value, onPick) {
+  return h('div', { class: 'seg' }, options.map(([v, label]) =>
+    h('button', { class: `btn small${v === value ? ' on' : ''}`, onclick: () => onPick(v) }, label)));
+}
+
+function renderPlan() {
+  const p = app.plan;
+  const set = (k) => (v) => { p[k] = v; rerender(); };
+  const startLabel = p.startMode === 'gps' ? (gps.last ? 'my position' : 'my position (waiting for GPS)')
+    : p.startMode === 'tap' ? (p.start ? `${p.start[1].toFixed(4)}, ${p.start[0].toFixed(4)}` : 'tap the map') : 'the map centre';
+  const out = [
+    h('div', { class: 'label' }, `Start: ${startLabel}`),
+    seg([['gps', 'My position'], ['centre', 'Map centre'], ['tap', 'Tap the map']], p.startMode, (v) => {
+      p.startMode = v;
+      if (v === 'gps' && !gps.on) locate();
+      if (v === 'tap') { app.planPick = true; closePanel(); toast('Tap the map where the ride starts.'); return; }
+      rerender();
+    }),
+    h('div', { class: 'label', id: 'plan-len' }, `Length: about ${p.length} km`),
+    h('label', { class: 'slider', style: 'padding-left:0' }, h('input', {
+      type: 'range', min: 2, max: 60, step: 1, value: p.length,
+      oninput: (e) => { p.length = +e.target.value; const l = $('plan-len'); if (l) l.textContent = `Length: about ${p.length} km`; },
+      onchange: () => rerender(),
+    })),
+    seg([['loop', 'Loop'], ['out-back', 'Out and back']], p.shape, set('shape')),
+    h('div', { class: 'label' }, 'Hill climbs'),
+    seg([[0, 'None'], [1, '1'], [2, '2'], [3, '3']], p.climbs, set('climbs')),
+    p.climbs ? h('div', { class: 'row', style: 'border:0' }, h('span', { class: 'grow' }, 'steeper than'),
+      seg([[12, '12 %'], [15, '15 %'], [20, '20 %'], [25, '25 %']], p.minClimbGrade, set('minClimbGrade'))) : null,
+    toggleRow('Avoid red (doubtful or hard) tracks', p.avoidRed, (v) => { p.avoidRed = v; }),
+    toggleRow('Prefer dirt over tarmac', p.preferDirt, (v) => { p.preferDirt = v; }),
+    toggleRow('Allow ways closed to motors in OSM', p.allowNoAccess, (v) => { p.allowNoAccess = v; }),
+    btn(p.busy ? 'Working…' : p.results.length ? 'Generate different routes' : 'Generate routes', generatePlan, 'primary big'),
+    h('p', { class: 'note' }, 'Routes use the area pack: the risk colours, steepness (approximate), dirt vs tarmac and access tags. '
+      + 'Check each one on the imagery before riding.'),
+  ];
+  p.results.forEach((r, i) => {
+    const s = r.stats;
+    const color = PLAN_COLORS[i % PLAN_COLORS.length];
+    const pct = (x) => `${Math.round(x * 100)} %`;
+    out.push(h('div', { class: `card plan-card${i === p.sel ? ' sel' : ''}`, style: `--c:${color}`,
+      onclick: (e) => { if (e.target.closest('button')) return; p.sel = i; drawPlan(); fitCoords(r.coords); rerender(); } },
+    h('div', { class: 'row' }, h('strong', { class: 'grow' }, `Route ${i + 1}: ${fmtDist(s.len)}`),
+      h('span', { class: 'muted' }, `↑ ${fmtElev(s.up)}`)),
+    h('div', { class: 'note' }, [
+      `${s.climbs.length} climb${s.climbs.length === 1 ? '' : 's'}${s.climbs.length ? ` (steepest about ${Math.round(Math.max(...s.climbs.map((c) => c.grade)))} %)` : ''}`,
+      `${pct(s.dirt)} dirt`, s.reused > 0.05 ? `${pct(s.reused)} ridden twice` : null,
+      s.restricted > 0 ? `${pct(s.restricted)} restricted access` : null,
+    ].filter(Boolean).join(' · ')),
+    h('div', { class: 'riskbar' }, h('i', { style: `width:${s.green * 100}%;background:#00c853` }),
+      h('i', { style: `width:${s.yellow * 100}%;background:#ffd600` }), h('i', { style: `width:${s.red * 100}%;background:#ff1744` })),
+    h('div', { class: 'note' }, `green ${pct(s.green)} · yellow ${pct(s.yellow)} · red ${pct(s.red)}`),
+    h('div', { class: 'row-btns' },
+      btn('Show', () => { p.sel = i; drawPlan(); fitCoords(r.coords); closePanel(); }),
+      btn('Save', async () => {
+        const d = new Date();
+        const name = `Plan ${fmtDist(s.len)} ${d.toLocaleDateString()} #${i + 1}`;
+        const t = await savePlanned(name, r.coords, s, { length: p.length, shape: p.shape, climbs: p.climbs }, color);
+        await app.refreshTracks();
+        toast(`Saved "${name}" in Tracks`, { action: 'GPX', onAction: () => shareGPX(t) });
+      }, 'primary'),
+      btn('GPX', async () => {
+        const t = { name: `DirtScout ${fmtDist(s.len)} route`, fc: { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: r.coords } }] } };
+        const res = await shareGPX(t);
+        if (res === 'downloaded') toast('GPX saved to Downloads');
+      }))));
+  });
+  if (p.results.length) out.push(btn('Clear the routes', () => { p.results = []; drawPlan(); rerender(); }));
+  out.push(h('h3', {}, 'Sample rides for your review'), h('div', { id: 'samples' }, h('p', { class: 'note' }, 'Loading…')));
+  loadSamples();
+  return out;
+}
+
+async function loadSamples() {
+  const box = $('samples');
+  const data = await loadPackJson('samples');
+  if (!box) return;
+  if (!data?.samples?.length) { fill(box, h('p', { class: 'note' }, 'Not available yet: install the area pack (Offline).')); return; }
+  const pct = (x) => `${Math.round(x * 100)} %`;
+  fill(box, h('p', { class: 'note' }, 'Ten loops from villages around Cluj, made by the generator. Tell Claude which look right and which do not: '
+    + 'that tunes the risk colours and the route costs before the batch of 100.'),
+  data.samples.map((smp) => {
+    const s = smp.stats;
+    const show = () => {
+      const coords = decodePolyline(smp.poly);
+      app.plan.results = [{ coords, stats: { len: s.len, up: s.up, climbs: Array(s.climbs).fill({ grade: s.maxUp }), dirt: s.dirt, green: s.green, yellow: s.yellow, red: s.red, reused: 0, restricted: 0 } }];
+      app.plan.sel = 0;
+      drawPlan();
+      fitCoords(coords);
+      return coords;
+    };
+    return h('div', { class: 'card' },
+      h('div', { class: 'row' }, h('strong', { class: 'grow' }, smp.name), h('span', { class: 'muted' }, `up ${fmtElev(s.up)}`)),
+      h('div', { class: 'note' }, `${s.climbs} climb${s.climbs === 1 ? '' : 's'}${s.climbs ? ` (steepest about ${s.maxUp} %)` : ''} · ${pct(s.dirt)} dirt · green ${pct(s.green)}, yellow ${pct(s.yellow)}, red ${pct(s.red)}`),
+      h('div', { class: 'row-btns' },
+        btn('Show', () => { show(); closePanel(); }),
+        btn('Save', async () => {
+          const coords = decodePolyline(smp.poly);
+          const t = await savePlanned(`Sample ${smp.name}`, coords, { up: s.up, dn: s.up, climbs: Array(s.climbs).fill(0), green: s.green, yellow: s.yellow, red: s.red }, { sample: smp.id }, '#00e5ff');
+          await app.refreshTracks();
+          toast(`Saved "${t.name}" in Tracks`);
+        })));
+  }));
 }
 
 // ---------------------------------------------------------------- Offline maps (downloads)
@@ -317,6 +714,67 @@ async function startDownload() {
   rerender();
 }
 
+let packJob = null;          // {name, got, total} while installing
+
+async function packCard() {
+  const man = await fetchManifest();
+  app.packManifest = man ?? app.packManifest;
+  const m = app.packManifest;
+  const names = m ? Object.keys(m.files).filter((n) => PACK_FILES[n]) : Object.keys(PACK_FILES);
+  const inst = names.every((n) => packInstalled[n]);
+  const outdated = m && inst && names.some((n) => packInstalled[n].version !== m.version);
+  const size = m ? names.reduce((a, n) => a + m.files[n].bytes, 0) : null;
+  return h('div', { class: 'card' },
+    h('div', { class: 'row' }, h('strong', { class: 'grow' }, 'DirtScout map + bare-earth elevation'),
+      h('span', { class: `badge${inst ? ' ok' : ''}` }, inst ? `installed ${packInstalled.area.version}` : 'not installed')),
+    h('p', { class: 'note' }, 'Tracks with their evidence (seen from above, GPS traces, forest, steepness, access), gates, peaks, '
+      + 'springs, villages, routes, contours and Microsoft road detections, plus FABDEM elevation for hillshade and slope.'),
+    m ? h('p', { class: 'note' }, `Server version ${m.version}, ${fmtBytes(size)}.`) : h('p', { class: 'note' }, 'Server not reachable now.'),
+    packJob ? h('div', { class: 'bar' }, h('div', { style: `width:${packJob.total ? Math.floor((100 * packJob.got) / packJob.total) : 5}%` })) : null,
+    packJob ? h('p', { class: 'note' }, `Downloading ${packJob.name}: ${fmtBytes(packJob.got)}${packJob.total ? ` of ${fmtBytes(packJob.total)}` : ''}`) : null,
+    h('div', { class: 'row-btns' },
+      m && !packJob && (!inst || outdated) ? btn(outdated ? 'Update the area pack' : 'Install the area pack', () => runPackInstall(m), 'primary') : null,
+      inst && !packJob ? btn('Remove', async () => {
+        if (!confirm('Remove the area pack from this phone?')) return;
+        for (const n of Object.keys(PACK_FILES)) await uninstallPack(n);
+        app.graph = null;
+        clearDemCaches();
+        reloadPack(app.map);
+        applyLayers(app.map);
+        rerender();
+      }) : null));
+}
+
+async function runPackInstall(m) {
+  if (!navigator.onLine) { toast('No network'); return; }
+  try {
+    try { await navigator.storage?.persist?.(); } catch { /* best effort */ }
+    wake.want('pack', true);
+    for (const name of Object.keys(m.files).filter((n) => PACK_FILES[n])) {
+      packJob = { name: { area: 'map', dem: 'elevation', graph: 'route network', samples: 'sample rides' }[name] ?? name, got: 0, total: m.files[name].bytes };
+      rerender();
+      let last = 0;
+      await installPack(name, m.version, (got, total) => {
+        packJob.got = got;
+        packJob.total = total || packJob.total;
+        if (performance.now() - last > 400) { last = performance.now(); if (current === 'downloads') rerender(); }
+      });
+    }
+    packJob = null;
+    app.graph = null;
+    clearDemCaches();
+    reloadPack(app.map);
+    applyLayers(app.map);
+    toast(`Area pack ${m.version} installed: the DirtScout map now works offline.`);
+  } catch (e) {
+    packJob = null;
+    toast(`Area pack download failed: ${e.message}`);
+  } finally {
+    wake.want('pack', false);
+    rerender();
+  }
+}
+
 async function renderDownloads() {
   app.stats = await db.tileStats();
   const est = (await navigator.storage?.estimate?.().catch(() => null)) ?? {};
@@ -326,6 +784,8 @@ async function renderDownloads() {
       h('span', {}, est.quota ? `${fmtBytes(est.usage)} used of ${fmtBytes(est.quota)}` : 'unknown')),
     h('p', { class: 'note' }, persisted ? 'Protected: Chrome will not clear this data by itself.'
       : 'Not protected yet: Chrome may clear it if the phone runs out of space. DirtScout asks for protection with the first download; installing the app helps.'))];
+
+  out.push(h('h3', {}, 'Area pack'), await packCard());
 
   out.push(h('h3', {}, 'Saved on this phone'));
   for (const id of OFFLINE_SOURCES) {
@@ -384,6 +844,7 @@ async function renderTracks() {
       ].filter(Boolean).join(' · ')),
       h('div', { class: 'row-btns' },
         t.stats.bbox ? btn('Show', () => { fitTrack(t); closePanel(); }) : null,
+        lines ? btn('Investigate', () => runInvestigation(t), 'primary') : null,
         lines ? btn('Save detail offline', () => { presetCorridor(t.id); openPanel('downloads'); }) : null,
         btn('GPX', async () => { const r = await shareGPX(t); if (r === 'downloaded') toast('GPX saved to Downloads'); }),
         btn('Rename', async () => {
@@ -600,6 +1061,8 @@ async function renderMore() {
 export function initUI(appState) {
   app = appState;
   app.dlForm = { sources: ['ms-earth', 'dem'], areaType: 'bbox', trackId: null, buffer: 300, zmin: 10, zmax: 16 };
+  app.plan = { startMode: 'gps', start: null, length: 4, shape: 'loop', climbs: 1, minClimbGrade: 15, avoidRed: true,
+    preferDirt: true, allowNoAccess: false, results: [], sel: 0, busy: false, seed: 1 };
   app.markTet = false;
   app.follow = false;
   app.recLine = [];
@@ -615,6 +1078,7 @@ export function initUI(appState) {
   $('st-dl').addEventListener('click', () => openPanel('downloads'));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
 
+  app.map.on('click', onMapClick);
   app.map.on('dragstart', (e) => {
     if (e.originalEvent && app.follow) { app.follow = false; updateStatus(); }
   });
@@ -627,6 +1091,7 @@ export function initUI(appState) {
       const firstFix = !app.hadFix;
       app.map.easeTo({ center: [f.lon, f.lat], zoom: firstFix ? Math.max(app.map.getZoom(), 15) : app.map.getZoom(), duration: firstFix ? 600 : 300 });
     }
+    if (!app.hadFix && $('toast').textContent.startsWith('Looking for GPS')) $('toast').hidden = true;
     app.hadFix = true;
     if (Date.now() - lastElev > 5000) {
       lastElev = Date.now();
@@ -663,7 +1128,12 @@ export function initUI(appState) {
     if (current === 'downloads') $('dl-jobs') && fill($('dl-jobs'), await renderJobs());
   });
 
-  const netChanged = () => { applyLayers(app.map); updateStatus(); if (current === 'layers') rerender(); };
+  const netChanged = () => {
+    if (navigator.onLine && !packInstalled.area) reloadPack(app.map);
+    applyLayers(app.map);
+    updateStatus();
+    if (current === 'layers') rerender();
+  };
   window.addEventListener('online', netChanged);
   window.addEventListener('offline', netChanged);
 

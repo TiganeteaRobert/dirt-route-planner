@@ -26,6 +26,18 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      # The area pack (pipeline/, built on the PC) is a release asset, not part of git: take the newest pack-* release.
+      - name: Add the area pack
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,createdAt \
+                --jq '[.[] | select(.tagName | startswith("pack-"))] | sort_by(.createdAt) | reverse | .[0].tagName // ""')
+          if [ -n "$TAG" ]; then
+            mkdir -p dist/pack
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist/pack --pattern '*.pmtiles' --pattern '*.json'
+          fi
+          ls -la dist/pack || echo "no area pack release yet"
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

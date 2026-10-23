@@ -59,11 +59,25 @@ export const SOURCES = {
     name: 'Elevation (hillshade + slope)', short: 'Elevation', kind: 'dem', offline: true,
     upstream: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png', minzoom: 0, maxzoom: 12,
     downloadZoom: [8, 12], avgKB: 100,
-    attribution: 'Terrain Tiles (Mapzen/Tilezen, AWS Open Data; EU-DEM, SRTM)',
+    attribution: 'Elevation: FABDEM V1-2 © Univ. of Bristol (CC BY-NC-SA 4.0) in the area pack; Terrain Tiles (Mapzen/Tilezen) elsewhere',
   },
 };
 
 export const OFFLINE_SOURCES = Object.keys(SOURCES).filter((id) => SOURCES[id].offline);
+
+// DirtScout's own map, drawn from the area pack (OSM data + evidence; see pipeline/).
+export const DS_BASE = { id: 'ds-topo', name: 'DirtScout topo (area pack)' };
+
+// Area-pack overlays: [id, name, slider label].
+export const DS_OVERLAY_LIST = [
+  ['ds-tracks', 'Tracks & paths (DirtScout)', 'Opacity'],
+  ['ds-pois', 'Gates, fords, peaks, springs, huts', null],
+  ['ds-places', 'Place names', null],
+  ['ds-routes', 'Hiking / MTB routes (OSM)', 'Opacity'],
+  ['ds-detections', 'Microsoft road detections', 'Opacity'],
+  ['ds-contours', 'Contour lines (20 m)', 'Opacity'],
+  ['ds-protected', 'Protected areas', null],
+];
 
 // Overlays drawn from data the app computes or holds (not tile servers).
 export const LOCAL_OVERLAYS = {
