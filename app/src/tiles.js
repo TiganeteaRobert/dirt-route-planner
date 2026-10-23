@@ -116,6 +116,22 @@ async function offlineTile(params, abort) {
   return { data: (await overzoom(src, z, x, y)) ?? (await emptyTile()) };
 }
 
+// Decoded imagery for one tile (the track follower): stored -> network -> stretched parent; null when none.
+export async function imageryBitmap(src, z, x, y) {
+  const rec = await db.getTile(tileKey(src, z, x, y));
+  if (rec?.b) return createImageBitmap(rec.b);
+  if (!rec && networkAllowed()) {
+    try {
+      const t = await fetchTile(src, z, x, y, withTimeout(new AbortController().signal, 10000));
+      netOk();
+      if (!t.none) return await createImageBitmap(new Blob([t.buf], { type: t.type }));
+    } catch (e) {
+      if (!(e instanceof HttpError)) netFail();
+    }
+  }
+  return overzoom(src, z, x, y);
+}
+
 // ---- elevation tiles decoded to metres (shared by slope shading and the elevation readout) ----
 const demCache = new Map();          // 'z/x/y' -> Promise<Float32Array | null>
 const DEM_CACHE_MAX = 48;

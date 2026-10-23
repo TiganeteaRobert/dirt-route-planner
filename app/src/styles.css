@@ -271,6 +271,7 @@ a.btn { display: inline-block; text-decoration: none; margin: 10px 0; }
   font-weight: 700;
 }
 #drawbar .row-btns { margin: 8px 0 6px; }
+#drawbar .follow-row { min-height: 40px; border: 0; font-weight: 600; font-size: 15px; padding: 0; }
 #drawbar .btn { flex: 1; }
 @media (min-width: 760px) { #drawbar { width: 420px; right: auto; } }
 

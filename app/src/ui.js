@@ -10,6 +10,7 @@ import { installed as packInstalled, fetchManifest, install as installPack, unin
 import { decodePolyline } from '../../core/polyline.js';
 import { loadGraph, nearestNode, generateRoutes, routeCoords, haversine } from '../../core/routing.js';
 import { densify } from '../../core/geo.js';
+import { followTrack } from './livewire.js';
 import { downloader, estimateJob, sourceZooms } from './downloads.js';
 import * as db from './db.js';
 import { gps, recorder } from './gps.js';
@@ -413,23 +414,39 @@ function renderInvestigation() {
 
 // ---------------------------------------------------------------- Draw a road
 
+// The drawing: taps (shown as dots) and the parts between them (straight, or following the imagery).
+const drawCoords = (d) => (d.taps.length ? [d.taps[0].p, ...d.parts.flat()] : []);
+
 function startDraw() {
-  app.draw = { coords: [], snapped: [] };
+  app.draw = { taps: [], parts: [], busy: false };
   closePanel();
   $('drawbar').hidden = false;
   updateDrawBar();
-  toast('Tap along the road. Taps near a mapped track snap onto it (green), so your road joins the network.', { ms: 6000 });
+  toast('Tap where the road starts, then where it bends or ends: the line follows the track in the imagery. Taps near a mapped track snap onto it (green).', { ms: 7000 });
 }
 
-function updateDrawBar() {
+function updateDrawBar(msg = null) {
   const d = app.draw;
+  const coords = drawCoords(d);
   let len = 0;
-  for (let i = 1; i < d.coords.length; i++) len += haversine(d.coords[i - 1][0], d.coords[i - 1][1], d.coords[i][0], d.coords[i][1]);
-  $('drawbar-text').textContent = d.coords.length ? `${d.coords.length} points · ${fmtDist(len)}` : 'Tap along the road';
-  $('draw-save').disabled = d.coords.length < 2;
-  $('draw-undo').disabled = !d.coords.length;
-  setDraw(app.map, d.coords, d.snapped);
+  for (let i = 1; i < coords.length; i++) len += haversine(coords[i - 1][0], coords[i - 1][1], coords[i][0], coords[i][1]);
+  $('drawbar-text').textContent = msg ?? (d.taps.length ? `${d.taps.length} taps · ${fmtDist(len)}` : 'Tap where the road starts');
+  $('draw-save').disabled = d.busy || coords.length < 2;
+  $('draw-undo').disabled = d.busy || !d.taps.length;
+  setDraw(app.map, coords, []);
+  app.map.getSource('draw') && setDrawTaps();
 }
+
+function setDrawTaps() {
+  const d = app.draw;
+  const coords = drawCoords(d);
+  const features = d.taps.map((t) => ({ type: 'Feature', properties: { snap: t.snapped ? 1 : 0 }, geometry: { type: 'Point', coordinates: t.p } }));
+  if (coords.length > 1) features.unshift({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } });
+  app.map.getSource('draw').setData({ type: 'FeatureCollection', features });
+}
+
+// Imagery to follow: the base on screen when it is imagery, else Microsoft Earth.
+const followSource = () => (['ms-earth', 'esri-imagery'].includes(effectiveBase()) ? effectiveBase() : 'ms-earth');
 
 // A tap near a rendered track (DirtScout or yours) snaps to the closest point on it.
 function snapPoint(e) {
@@ -454,10 +471,34 @@ function snapPoint(e) {
   return best ? [best.lng, best.lat] : null;
 }
 
-function addDrawPoint(e) {
+async function addDrawPoint(e) {
+  const d = app.draw;
+  if (d.busy) return;
   const snapped = snapPoint(e);
-  app.draw.coords.push(snapped ?? [e.lngLat.lng, e.lngLat.lat]);
-  app.draw.snapped.push(!!snapped);
+  const p = snapped ?? [e.lngLat.lng, e.lngLat.lat];
+  if (!d.taps.length) {
+    d.taps.push({ p, snapped: !!snapped });
+    updateDrawBar();
+    return;
+  }
+  const from = d.taps.at(-1).p;
+  let part = [p];
+  if ($('draw-follow').checked) {
+    d.busy = true;
+    updateDrawBar('Following the track in the imagery…');
+    try {
+      const path = await followTrack(followSource(), from, p);
+      if (path && path.length > 1) part = [...path.slice(1, -1), p];
+      else toast('No clear line to follow there: drawn straight. Add a tap in between to help.', { ms: 4000 });
+    } catch (err) {
+      console.warn('follow', err);
+    } finally {
+      d.busy = false;
+    }
+    if (app.draw !== d) return;                      // cancelled meanwhile
+  }
+  d.taps.push({ p, snapped: !!snapped });
+  d.parts.push(part);
   updateDrawBar();
 }
 
@@ -465,6 +506,14 @@ function endDraw() {
   app.draw = null;
   $('drawbar').hidden = true;
   setDraw(app.map, [], []);
+}
+
+function undoDraw() {
+  const d = app.draw;
+  if (!d || d.busy || !d.taps.length) return;
+  d.taps.pop();
+  d.parts.pop();
+  updateDrawBar();
 }
 
 // Elevation along the drawn road: climb, descent and the steepest 100 m (same smoothing as the pack).
@@ -485,10 +534,10 @@ async function drawnProfile(coords) {
 
 async function saveDraw() {
   const d = app.draw;
-  if (!d || d.coords.length < 2) return;
+  const coords = d ? drawCoords(d) : [];
+  if (!d || d.busy || coords.length < 2) return;
   const name = prompt('Name of this road', `My road ${new Date().toLocaleDateString()}`);
   if (name === null) return;
-  const coords = d.coords;
   endDraw();
   const stats = await drawnProfile(coords);
   const t = await saveDrawn(name.trim() || 'My road', coords, stats);
@@ -1182,7 +1231,7 @@ export function initUI(appState) {
     b.addEventListener('click', () => (current === b.dataset.sheet ? closePanel() : openPanel(b.dataset.sheet)));
   }
   $('sheet-close').addEventListener('click', closePanel);
-  $('draw-undo').addEventListener('click', () => { app.draw?.coords.pop(); app.draw?.snapped.pop(); if (app.draw) updateDrawBar(); });
+  $('draw-undo').addEventListener('click', undoDraw);
   $('draw-cancel').addEventListener('click', endDraw);
   $('draw-save').addEventListener('click', saveDraw);
   $('btn-locate').addEventListener('click', locate);
