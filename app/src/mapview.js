@@ -146,8 +146,11 @@ function buildStyle() {
   layers.push(
     { id: 'me-acc', type: 'fill', source: 'me', paint: { 'fill-color': '#2196f3', 'fill-opacity': 0.15 } },
     { id: 'me-acc-line', type: 'line', source: 'me', paint: { 'line-color': '#2196f3', 'line-width': 1.5, 'line-opacity': 0.6 } },
-    { id: 'cursor', type: 'circle', source: 'cursor',
-      paint: { 'circle-radius': 8, 'circle-color': '#ffffff', 'circle-stroke-color': '#111511', 'circle-stroke-width': 3.5 } },
+    // the steep stretch under a finger on an elevation chart (the dot itself is a marker: above the route's points)
+    { id: 'cursor-steep-casing', type: 'line', source: 'cursor', filter: ['==', ['geometry-type'], 'LineString'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#000000', 'line-width': 13, 'line-opacity': 0.7 } },
+    { id: 'cursor-steep', type: 'line', source: 'cursor', filter: ['==', ['geometry-type'], 'LineString'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': 8 } },
   );
   return { version: 8, glyphs: `${APP_BASE}fonts/{fontstack}/{range}.pbf`, sources, layers };
 }
@@ -268,9 +271,25 @@ export function setBuild(map, fc) {
   map.getSource('build')?.setData(fc ?? EMPTY_FC);
 }
 
-// The dot that follows a finger on an elevation chart ([lon, lat], or null to hide it).
-export function setCursor(map, p) {
-  map.getSource('cursor')?.setData(p ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: p } }] } : EMPTY_FC);
+// The dot that follows a finger on an elevation chart: p [lon, lat] (null hides it), in the grade's colour, with a
+// label above it; the steep stretch it is on ([[lon, lat], ...]) is drawn in the same colour.
+let cursor = null;
+export function setCursor(map, p, { color = '#ffffff', label = '', steep = null } = {}) {
+  map.getSource('cursor')?.setData(steep?.length > 1
+    ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { color }, geometry: { type: 'LineString', coordinates: steep } }] }
+    : EMPTY_FC);
+  if (!p) { cursor?.remove(); cursor = null; return; }
+  if (!cursor) {
+    const el = document.createElement('div');
+    el.className = 'map-cursor';
+    el.innerHTML = '<div class="map-cursor-label"></div><div class="map-cursor-dot"></div>';
+    cursor = new Marker({ element: el }).setLngLat([p[0], p[1]]).addTo(map);
+  }
+  const el = cursor.getElement();
+  el.querySelector('.map-cursor-dot').style.background = color;
+  el.querySelector('.map-cursor-label').textContent = label;
+  el.querySelector('.map-cursor-label').hidden = !label;
+  cursor.setLngLat([p[0], p[1]]);
 }
 
 export function setSelected(map, id) {

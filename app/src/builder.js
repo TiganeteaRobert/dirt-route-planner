@@ -11,7 +11,7 @@ import { setBuild, setCursor } from './mapview.js';
 import { elevationAt } from './tiles.js';
 import { savePlanned, shareGPX } from './tracks.js';
 import { h, fmtDist, fmtElev } from './format.js';
-import { profileSection } from './profileview.js';
+import { profileSection, fitInView } from './profileview.js';
 
 const $ = (id) => document.getElementById(id);
 const SNAP_PX = 44;              // a tap holds on to the nearest way within this many screen pixels (25 m at least)
@@ -23,7 +23,12 @@ export function initBuilder(c) {
   ctx = c;
   $('build-undo').addEventListener('click', undo);
   $('build-loop').addEventListener('click', () => toggleLoop());
-  $('build-stats').addEventListener('click', () => { closeMenu(); ctx.openPanel('route'); });
+  $('build-stats').addEventListener('click', () => {
+    closeMenu();
+    ctx.openPanel('route');
+    const b = B();
+    if (b) requestAnimationFrame(() => fitInView(ctx.app.map, routeLine(b)));     // into the map above the sheet
+  });
   $('build-save').addEventListener('click', save);
   $('build-exit').addEventListener('click', () => leave());
 }
@@ -90,6 +95,11 @@ async function ready(b) {
 // ---------------------------------------------------------------- start / leave
 
 export const builderActive = () => !!B();
+
+// While a panel with the elevation chart is open the bar steps aside (the map above the sheet is all there is).
+export function panelShown(name) {
+  if (B()) $('buildbar').hidden = name === 'route' || name === 'profile';
+}
 
 export async function startBuilder(track = null) {
   if (B() && !track) { ctx.closePanel(); return; }        // already building: back to the map
@@ -407,9 +417,23 @@ export function renderRoute() {
   if (!b) return [h('p', { class: 'note' }, 'Open Plan and tap "Make my own route".')];
   if (b.legs.length === 0) return [h('p', { class: 'note' }, 'Tap at least two points on the map.')];
   const st = routeStats(b), L = st.len;
+  // first what the finger needs (the chart, with the map above the sheet), then what the route rides
   const out = [
+    h('div', { class: 'row-btns' },
+      btn('Save', save, 'primary'),
+      btn('GPX', async () => {
+        const r = await shareGPX({ name: b.track?.name ?? `DirtScout route ${fmtDist(L)}`, fc: lineFc(routeLine(b), 'route') });
+        if (r === 'downloaded') ctx.toast('GPX saved to Downloads');
+      }),
+      btn('Keep editing', () => ctx.closePanel())),
     h('div', { class: 'verdict' }, h('strong', {}, fmtDist(L)),
       h('span', {}, ` · ${b.pts.length} points${b.closed ? ' · a loop' : ''}${b.profile ? ` · ↑ ${fmtElev(b.profile.up)} ↓ ${fmtElev(b.profile.down)}` : ''}`)),
+  ];
+  if (b.profile === null) out.push(h('p', { class: 'note' }, 'Reading the elevation…'));
+  else if (b.profile === false) out.push(h('p', { class: 'note' }, 'No elevation here: download "Elevation" in Offline maps, or go online.'));
+  else out.push(...profileSection(ctx.app.map, b.profile));
+  out.push(
+    h('h3', {}, 'What it rides'),
     h('div', { class: 'riskbar' }, h('i', { style: `width:${(st.risk[0] / L) * 100}%;background:#00c853` }),
       h('i', { style: `width:${(st.risk[1] / L) * 100}%;background:#ffd600` }), h('i', { style: `width:${(st.risk[2] / L) * 100}%;background:#ff1744` })),
     h('div', { class: 'note' }, [`green ${pct(st.risk[0], L)}`, `yellow ${pct(st.risk[1], L)}`, `red ${pct(st.risk[2], L)}`,
@@ -419,17 +443,7 @@ export function renderRoute() {
     st.gaps ? h('p', { class: 'note warn' }, `${st.gaps} gap${st.gaps === 1 ? '' : 's'} between AI-found tracks (${fmtDist(st.gapLen)}, white dashes): nothing was seen there.`) : null,
     st.offs ? h('p', { class: 'note warn' }, `${fmtDist(st.off)} where no track is known (red dashes): the route crosses straight between two `
       + 'networks there. Check it on the imagery, or move the points.') : null,
-  ];
-  if (b.profile === null) out.push(h('p', { class: 'note' }, 'Reading the elevation…'));
-  else if (b.profile === false) out.push(h('p', { class: 'note' }, 'No elevation here: download "Elevation" in Offline maps, or go online.'));
-  else out.push(...profileSection(ctx.app.map, b.profile));
-  out.push(h('div', { class: 'row-btns' },
-    btn('Save', save, 'primary'),
-    btn('GPX', async () => {
-      const r = await shareGPX({ name: b.track?.name ?? `DirtScout route ${fmtDist(L)}`, fc: lineFc(routeLine(b), 'route') });
-      if (r === 'downloaded') ctx.toast('GPX saved to Downloads');
-    }),
-    btn('Keep editing', () => ctx.closePanel())));
+  );
   return out;
 }
 

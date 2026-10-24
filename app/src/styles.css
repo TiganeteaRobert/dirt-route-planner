@@ -104,6 +104,7 @@ html, body {
   box-shadow: 0 -6px 26px rgba(0, 0, 0, 0.38);
   z-index: 10;
 }
+.sheet.short { height: 54%; }              /* panels with an elevation chart: a fixed size, more map above them */
 .sheet-head { display: flex; align-items: center; padding: 6px 6px 4px 18px; border-bottom: 1px solid var(--line); }
 .sheet-head h2 { flex: 1; margin: 0; font-size: 21px; }
 .icon-btn { width: 54px; height: 54px; border: 0; background: none; font-size: 24px; color: var(--ink); }
@@ -328,6 +329,31 @@ a.btn { display: inline-block; text-decoration: none; margin: 10px 0; }
 .rb-menu .btn { display: block; width: 100%; margin: 4px 0; min-height: 46px; }
 .rb-menu .rb-menu-title { font: 800 14px system-ui, sans-serif; color: var(--muted); padding: 2px 4px; }
 
+/* ---- the dot that follows a finger on an elevation chart ---- */
+.map-cursor { width: 30px; height: 30px; z-index: 5; pointer-events: none; }
+.map-cursor-dot {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 4px solid #fff;
+  box-sizing: border-box;
+  box-shadow: 0 0 0 2.5px #111511, 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+.map-cursor-label {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: #fff;
+  color: #111511;
+  border: 2px solid #111511;
+  border-radius: 9px;
+  padding: 3px 8px;
+  font: 800 14px system-ui, sans-serif;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
 /* ---- position marker ---- */
 .me { width: 24px; height: 24px; }
 .me-dot {
@@ -368,6 +394,7 @@ a.btn { display: inline-block; text-decoration: none; margin: 10px 0; }
     max-height: none;
     border-radius: 16px;
   }
+  .sheet.short { height: auto; }
   #toolbar { grid-template-columns: repeat(7, 96px); justify-content: center; }
   #toast { left: auto; width: 420px; }
   .maplibregl-ctrl-top-right { right: 0; }

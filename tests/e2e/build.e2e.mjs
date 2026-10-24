@@ -161,6 +161,24 @@ try {
   await page.locator('.sheet-body .elev-chart canvas').waitFor({ timeout: 10000 });
   const text = await page.locator('.sheet-body').innerText();
   check(/green \d+ %/.test(text) && /Up \d+ m/.test(text), 'the panel shows what the route rides and its climb');
+  // a finger sliding along the chart: the dot on the map follows, in the part of the map above the sheet
+  check(await page.evaluate(() => document.getElementById('buildbar').hidden), 'the bar steps aside while the profile is open');
+  const cb = await page.locator('.sheet-body .elev-chart canvas').boundingBox();
+  const dots = [];
+  for (const f of [0.2, 0.5, 0.8]) {
+    await page.mouse.move(cb.x + cb.width * f, cb.y + cb.height / 2, { steps: 4 });
+    await settle(450);
+    dots.push(await page.evaluate(() => {
+      const el = document.querySelector('.map-cursor');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { label: el.textContent, y: r.top + r.height / 2, x: r.left + r.width / 2, sheetTop: document.getElementById('sheet').getBoundingClientRect().top };
+    }));
+  }
+  check(dots.every((d) => d && /\d+ m · .*%/.test(d.label)), `the dot shows distance, elevation and grade (${dots.map((d) => d?.label).join(' | ')})`);
+  check(dots.every((d) => d.y > 60 && d.y < d.sheetTop && d.x > 0 && d.x < 412), 'the dot is on the map above the sheet, every time');
+  check(new Set(dots.map((d) => d.label)).size === 3, 'and it moves with the finger');
+  await shot('chart-finger');
   const v0 = await page.locator('.elev-chart').evaluate((el) => el.view());
   await page.locator('.elev-chart button', { hasText: '+' }).click();
   await settle(300);

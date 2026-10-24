@@ -2,8 +2,8 @@
 import { SOURCES, LOCAL_OVERLAYS, SLOPE_CLASSES, OFFLINE_SOURCES, APP_NAME, DS_BASE, DS_OVERLAY_LIST } from './config.js';
 import { settings, saveSettings, defaultArea } from './settings.js';
 import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw, setAiTiles, setCursor } from './mapview.js';
-import { initBuilder, startBuilder, builderClick, renderRoute, builderActive, leave as leaveBuilder } from './builder.js';
-import { profileSection } from './profileview.js';
+import { initBuilder, startBuilder, builderClick, renderRoute, builderActive, leave as leaveBuilder, panelShown } from './builder.js';
+import { profileSection, fitInView } from './profileview.js';
 import { elevationProfile } from '../../core/profile.js';
 import { unlock as aiUnlock, update as aiUpdate, removeStored as aiRemove, loadAiGraph } from './aibundle.js';
 import { augmentGraph, filterAiEdges } from '../../core/usergraph.js';
@@ -47,9 +47,14 @@ const PANELS = {
 
 // ---------------------------------------------------------------- sheet, toast, status
 
+// Panels with an elevation chart get a shorter sheet (more map shows above it, where the chart's dot goes).
+const SHORT = new Set(['route', 'profile']);
+
 export function openPanel(name) {
   current = name;
   $('sheet').hidden = false;
+  $('sheet').classList.toggle('short', SHORT.has(name));
+  panelShown(name);
   $('sheet-title').textContent = PANELS[name][0];
   $('sheet-body').scrollTop = 0;
   for (const b of document.querySelectorAll('#toolbar [data-sheet]')) b.classList.toggle('active', b.dataset.sheet === name);
@@ -59,6 +64,7 @@ export function openPanel(name) {
 export function closePanel() {
   if (current === 'info') { setSelected(app.map, null); app.selected = null; }
   setCursor(app.map, null);
+  panelShown(null);
   current = null;
   $('sheet').hidden = true;
   for (const b of document.querySelectorAll('#toolbar [data-sheet]')) b.classList.remove('active');
@@ -1229,7 +1235,7 @@ async function openProfile(title, coords) {
   const p = { title, coords, profile: null, len: lineLength(coords) };
   app.prof = p;
   openPanel('profile');
-  fitCoords(coords);
+  requestAnimationFrame(() => fitInView(app.map, coords));          // into the map above the sheet
   p.profile = (await elevationProfile(coords, elevationAt)) ?? false;
   if (app.prof === p && current === 'profile') rerender();
 }
