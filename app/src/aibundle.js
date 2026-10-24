@@ -7,6 +7,10 @@ import { PACK_BASE } from './pack.js';
 import { decryptBundle, gunzipJson, normPass, WrongPassphrase } from '../../core/aicrypt.js';
 
 export const AI_FILE = 'ai.enc';
+// What the phone keeps: 2 = map tiles + graph; 3 = the same, from a graph with every junction in its own place and
+// the gaps joined (a format-2 graph shared junction ids between far-apart places: its routes jumped across the map).
+// A stored file of another format is fetched again with the saved passphrase (main.js, refreshAi).
+export const AI_FORMAT = 3;
 const KEYS = ['ai', 'ai-tiles', 'ai-graph'];
 let graphCache = null;
 
@@ -49,7 +53,7 @@ export async function unlock(pass, onProgress) {
   const tiles = new Blob([b.tiles], { type: 'application/octet-stream' });
   await db.put('packs', { blob: tiles, version: b.meta.version, bytes: tiles.size, saved }, 'ai-tiles');
   await db.put('packs', { blob: new Blob([b.graphGz]), version: b.meta.version, bytes: b.graphGz.byteLength, saved }, 'ai-graph');
-  await db.put('packs', { format: 2, meta: b.meta, version: b.meta.version, saved, pass: normPass(pass) }, 'ai');
+  await db.put('packs', { format: AI_FORMAT, meta: b.meta, version: b.meta.version, saved, pass: normPass(pass) }, 'ai');
   graphCache = null;
   return { meta: b.meta, tiles };
 }
@@ -66,7 +70,7 @@ export async function loadStored() {
   try {
     const rec = await db.get('packs', 'ai');
     if (!rec) return null;
-    const t = rec.format === 2 ? await db.get('packs', 'ai-tiles') : null;
+    const t = rec.format === AI_FORMAT ? await db.get('packs', 'ai-tiles') : null;
     return t ? { meta: rec.meta, tiles: t.blob } : { stale: true };
   } catch {
     return null;

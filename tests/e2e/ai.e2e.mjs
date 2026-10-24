@@ -37,10 +37,10 @@ const check = (ok, msg) => { if (!ok) throw new Error(`FAILED: ${msg}`); console
 const { line } = bundleData();
 const VIEW = { center: [(line[0][0] + line[1][0]) / 2, (line[0][1] + line[1][1]) / 2], zoom: 16 };
 
-// AI tracks drawn after the sensitivity filter (unique ids: a line crossing tile edges comes back once per tile)
-async function aiShown() {
-  return page.evaluate(() => new Set(window.dirtscout.map.queryRenderedFeatures({ layers: ['ds-tracks-ai'] })
-    .map((f) => f.properties.id)).size);
+// AI tracks (or gaps) drawn after the sensitivity filter (unique ids: a line crossing tile edges comes back once per tile)
+async function aiShown(layer = 'ds-tracks-ai') {
+  return page.evaluate((l) => new Set(window.dirtscout.map.queryRenderedFeatures({ layers: [l] })
+    .map((f) => f.properties.id)).size, layer);
 }
 async function aiEdges() {
   return page.evaluate(async () => {
@@ -102,6 +102,14 @@ try {
   check((await aiShown()) === 1, 'slider at 50 %: only the track scoring 82 % shows');
   await setAiMin(0.3);
   check((await aiShown()) === 2 && (await aiEdges()) === 2, 'slider at 30 %: both tracks shown and routed on');
+  await page.evaluate(() => window.dirtscout.map.jumpTo({ center: [23.1006, 46.6754], zoom: 16 }));     // the gap, east
+  await page.waitForFunction(() => window.dirtscout.map.areTilesLoaded(), null, { timeout: 20000 });
+  await settle(600);
+  check((await aiShown('ds-tracks-gap')) === 1, 'slider at 30 %: the gap joining them shows (dotted)');
+  await shot('ai-gap');
+  await page.evaluate((v) => window.dirtscout.map.jumpTo(v), VIEW);
+  await page.waitForFunction(() => window.dirtscout.map.areTilesLoaded(), null, { timeout: 20000 });
+  await settle(600);
   await setAiMin(0.9);
   check((await aiShown()) === 0 && (await aiEdges()) === 0, 'slider at 90 %: none shown or routed on');
   await setAiMin(0.3);
@@ -122,7 +130,7 @@ try {
   await shot('ai-track-card');
   await page.locator('#sheet-close').click();
 
-  // the route network includes the AI edges while the layer is on, and not when it is off
+  // routes use the AI edges unless Plan's switch is off; hiding the layer only hides it
   const withAi = await aiEdges();
   check(withAi === 2, `routing uses the AI edges (${withAi})`);
   await page.locator('#toolbar [data-sheet="layers"]').click();
@@ -130,13 +138,20 @@ try {
   await row.waitFor({ timeout: 10000 });
   await row.locator('input[type=checkbox]').uncheck();
   await settle(300);
-  const off = await page.evaluate(async () => {
-    const G = await window.dirtscout.debug.ensureGraph();
-    return { ai: G.classes.includes('ai') ? [...G.e.cls].filter((c) => G.classes[c] === 'ai').length : 0,
-      visible: window.dirtscout.map.getLayoutProperty('ds-tracks-ai', 'visibility') };
-  });
-  check(off.ai === 0 && off.visible === 'none', 'layer off: hidden and routes use the public network');
+  const hidden = await page.evaluate(() => window.dirtscout.map.getLayoutProperty('ds-tracks-ai', 'visibility'));
+  check(hidden === 'none' && (await aiEdges()) === 2, 'layer off: hidden, routes still use the AI tracks');
   await row.locator('input[type=checkbox]').check();
+  await page.locator('#sheet-close').click();
+  await page.locator('#toolbar [data-sheet="plan"]').click();
+  const planRow = page.locator('label.row', { hasText: 'Use the tracks the AI found' });
+  await planRow.waitFor({ timeout: 10000 });
+  await shot('plan-ai-switch');
+  await planRow.locator('input[type=checkbox]').uncheck();
+  await settle(300);
+  check((await aiEdges()) === 0, "Plan's switch off: routes use the public network");
+  await planRow.locator('input[type=checkbox]').check();
+  await settle(300);
+  check((await aiEdges()) === 2, "Plan's switch on: routes use the AI tracks again");
   await page.locator('#sheet-close').click();
 
   // airplane mode + reload: still unlocked, still drawn
@@ -150,16 +165,16 @@ try {
   await shot('offline-reload');
   await context.setOffline(false);
 
-  // a phone that unlocked the first (GeoJSON) format: the stored record has no format; the app fetches the new one
-  // with the saved passphrase by itself
+  // a phone that unlocked an older file (format 2: tiles and graph, but a graph whose routes jumped): the app fetches
+  // the new one with the saved passphrase by itself
   await page.evaluate(async (pass) => {
     const db = window.dirtscout.debug.db;
-    for (const k of ['ai-tiles', 'ai-graph']) await db.del('packs', k);
-    await db.put('packs', { blob: new Blob(['{}']), version: '2026-10-23.old', bytes: 2, saved: Date.now(), pass }, 'ai');
+    const rec = await db.get('packs', 'ai');
+    await db.put('packs', { ...rec, format: 2, version: '2026-10-24.old', pass }, 'ai');
   }, TEST_PASS.toLowerCase().replace(/\s+/g, ''));
   await page.reload();
   await page.waitForFunction(() => window.dirtscout?.ai?.meta?.version === '2026-10-23.test01', null, { timeout: 60000 });
-  check(await page.evaluate(async () => (await window.dirtscout.debug.db.get('packs', 'ai')).format === 2),
+  check(await page.evaluate(async () => (await window.dirtscout.debug.db.get('packs', 'ai')).format === 3),
     'an AI file in the old format is replaced by the new one on its own');
 
   const bad = errors.filter((e) => !/Failed to load resource|ERR_INTERNET_DISCONNECTED|net::/.test(e));

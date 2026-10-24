@@ -40,8 +40,18 @@ test('an AI-found track: more sure = more likely, a legal note, no Microsoft bon
   const sure = scoreEdge({ class: 'ai', aic: 0.9, det: 0.9, tp: 0, len: 400 });
   const unsure = scoreEdge({ class: 'ai', aic: 0.3, det: 0, tp: 0, len: 400 });
   assert.ok(sure.exists > unsure.exists);
-  assert.equal(unsure.name, 'red');
+  assert.equal(unsure.name, 'yellow');           // the owner's slider decides how sure; never green, red only when hard
+  assert.equal(sure.name, 'yellow');
+  assert.equal(scoreEdge({ class: 'ai', aic: 0.9, g100: 40, len: 400 }).name, 'red');
   assert.ok(sure.reasons.some((r) => r.code === 'unknown' && r.d === 'legal'));
   assert.ok(!sure.reasons.some((r) => r.code === 'det'));
   assert.ok(scoreEdge({ class: 'ai', aic: 0.8, tp: 30, tn: 3, len: 400 }).exists >= 0.75);   // ridden: traces lift it
+});
+
+test('a gap between AI tracks: yellow, says nothing was seen there', () => {
+  const s = scoreEdge({ class: 'gap', aic: 0.6, det: 0.9, len: 120 });
+  assert.equal(s.name, 'yellow');
+  assert.ok(s.reasons.some((r) => r.code === 'gap'));
+  assert.ok(!s.reasons.some((r) => r.code === 'det'));
+  assert.equal(scoreEdge({ class: 'gap', aic: 0.6, g100: 40, len: 120 }).name, 'red');
 });

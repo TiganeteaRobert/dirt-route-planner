@@ -1,4 +1,4 @@
-"""Writes tests/fixtures/ai_tiles.pmtiles: the two synthetic AI lines of tests/fixtures/aibundle.mjs as the vector tiles
+"""Writes tests/fixtures/ai_tiles.pmtiles: the synthetic AI lines and gap of tests/fixtures/aibundle.mjs as the vector tiles
 the app draws (layer "ai", z12-14). Synthetic data only. Run again if the fixture lines change:
     uv run --with numpy --with shapely --with mapbox-vector-tile --with pmtiles python tests/fixtures/make_ai_tiles.py
 """
@@ -9,10 +9,12 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent.parent / "pipeline"))
 from build_tiles import Layer, to_geom, write_pmtiles  # noqa: E402
 
-NODES = [[23.0880, 46.6700], [23.0920, 46.6705], [23.0950, 46.6720], [23.0975, 46.6740], [23.1000, 46.6748]]
+NODES = [[23.0880, 46.6700], [23.0920, 46.6705], [23.0950, 46.6720], [23.0975, 46.6740], [23.1000, 46.6748],
+         [23.1012, 46.6760]]
 LINES = [  # (from node, to node, properties) - keep in step with EDGES in aibundle.mjs
     (2, 3, {"id": "ai0", "len": 300, "aic": 0.82, "conf": 0.82, "risk": 1, "ex": 55}),
-    (3, 4, {"id": "ai1", "len": 210, "aic": 0.41, "conf": 0.41, "risk": 2, "ex": 45}),
+    (3, 4, {"id": "ai1", "len": 210, "aic": 0.41, "conf": 0.41, "risk": 1, "ex": 45}),
+    (4, 5, {"id": "gap0", "class": "gap", "len": 160, "aic": 0.41, "risk": 1, "ex": 30}),
 ]
 
 

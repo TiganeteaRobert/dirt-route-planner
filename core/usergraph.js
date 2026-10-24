@@ -19,15 +19,19 @@ function project(p, a, b) {
 const lineLen = (c) => c.slice(1).reduce((s, p, i) => s + haversine(c[i][0], c[i][1], p[0], p[1]), 0);
 
 /**
- * The AI bundle's graph with only the AI-found edges the model is at least `min` (0-1) sure of (column aic = 100 x its
- * confidence); every other edge stays. Returns the input itself when nothing is left out.
+ * The AI bundle's graph with only the AI-found edges (and the gaps joining them) that score at least `min` (0-1;
+ * column aic = 100 x the score, a gap's is its tracks' lowest); every other edge stays. Returns the input itself when
+ * nothing is left out.
  */
 export function filterAiEdges(json, min) {
-  const ai = json.classes.indexOf('ai');
+  const ai = json.classes.indexOf('ai'), gap = json.classes.indexOf('gap');
   const aic = json.edges.aic;
   if (ai < 0 || !aic) return json;
   const keep = [];
-  for (let e = 0; e < json.edges.cls.length; e++) if (json.edges.cls[e] !== ai || aic[e] >= min * 100 - 1e-9) keep.push(e);
+  for (let e = 0; e < json.edges.cls.length; e++) {
+    const c = json.edges.cls[e];
+    if ((c !== ai && c !== gap) || aic[e] >= min * 100 - 1e-9) keep.push(e);
+  }
   if (keep.length === json.edges.cls.length) return json;
   const pick = (arr) => keep.map((e) => arr[e]);
   return { ...json, edges: Object.fromEntries(Object.entries(json.edges).map(([k, v]) => [k, pick(v)])),

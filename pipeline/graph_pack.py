@@ -1,20 +1,21 @@
 """Step 8b: the routing graph for the phone -> data/area/graph.json (column arrays; geometry as encoded polylines,
 precision 1e-5 deg ~1 m). Read by core/routing.js. Needs edges_evidence.geojson and edge_scores.json.
 DS_AI=1: the private graph with the AI-found tracks -> data/ai/graph.json (one more column: aic, the AI's confidence).
+Stops with an error when an edge's ends are not where its nodes are (a node id used for two places: routes would jump).
     uv run python pipeline/graph_pack.py
 """
 import json
 import os
 import time
 
-from common import EDGES, read_fc
+from common import EDGES, haversine, read_fc
 
 PAVED = {"asphalt", "paved", "concrete", "concrete:plates", "concrete:lanes", "paving_stones", "sett", "cobblestone",
          "unhewn_cobblestone", "chipseal", "metal"}
 UNPAVED = {"unpaved", "gravel", "fine_gravel", "compacted", "dirt", "earth", "ground", "grass", "mud", "sand", "rock",
            "pebblestone", "woodchips", "grass_paver", "stone"}
 PAVED_CLASSES = {"residential", "living_street", "tertiary", "secondary", "primary", "trunk"}
-DIRT_CLASSES = {"track", "path", "bridleway", "detected", "ai"}
+DIRT_CLASSES = {"track", "path", "bridleway", "detected", "ai", "gap"}
 
 
 def paved(p, cls):
@@ -33,7 +34,8 @@ def paved(p, cls):
 
 # Class codes (index = code) - keep in step with core/routing.js CLASSES.
 CLASSES = ["track", "path", "bridleway", "unclassified", "residential", "service", "living_street", "road", "tertiary",
-           "secondary", "primary", "trunk", "detected", "ai"]
+           "secondary", "primary", "trunk", "detected", "ai", "gap"]
+MISMATCH = 15.0                     # m: an edge's end this far from its node's place means two places share an id
 
 
 def encode_polyline(coords, precision=5):
@@ -58,13 +60,16 @@ def main():
     scores = json.loads((EDGES / "edge_scores.json").read_text())
     ai = bool(os.environ.get("DS_AI"))
     node_ix, lon, lat = {}, [], []
+    bad = []
 
-    def node(osm_id, c):
+    def node(osm_id, c, eid):
         i = node_ix.get(osm_id)
         if i is None:
             i = node_ix[osm_id] = len(lon)
             lon.append(round(c[0] * 1e6))
             lat.append(round(c[1] * 1e6))
+        elif haversine((lon[i] / 1e6, lat[i] / 1e6), c) > MISMATCH:
+            bad.append((eid, osm_id, round(haversine((lon[i] / 1e6, lat[i] / 1e6), c))))
         return i
 
     cols = {k: [] for k in ("a", "b", "len", "cls", "risk", "lvl", "leg", "ex", "g", "gdir", "up", "dn", "tree", "det", "tt", "pav")
@@ -79,8 +84,8 @@ def main():
         sc = scores.get(p["id"], [0, 2, 2, 0])
         g = p.get("g100") if p.get("g100") is not None else p.get("g50") if p.get("g50") is not None else p.get("gall")
         tt = str(p.get("tracktype", ""))
-        cols["a"].append(node(p["from"], c[0]))
-        cols["b"].append(node(p["to"], c[-1]))
+        cols["a"].append(node(p["from"], c[0], p["id"]))
+        cols["b"].append(node(p["to"], c[-1], p["id"]))
         cols["len"].append(round(p["len"], 1))
         cols["cls"].append(CLASSES.index(cls))
         cols["risk"].append(sc[1])
@@ -100,6 +105,9 @@ def main():
         ids.append(p["id"])
         names.append(p.get("name") or "")
         geom.append(encode_polyline(c))
+    if bad:
+        raise SystemExit(f"{len(bad)} edge ends are not at their node (ids shared by two places), e.g. "
+                         + ", ".join(f"{e} node {n} {d} m off" for e, n, d in bad[:5]))
     out = {"version": 1, "classes": CLASSES, "nodes": {"lon": lon, "lat": lat}, "edges": cols, "ids": ids,
            "names": names, "geom": geom}
     path = EDGES / "graph.json"

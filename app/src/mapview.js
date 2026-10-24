@@ -5,7 +5,7 @@ import { SOURCES, DS_BASE } from './config.js';
 import { settings, saveSettings } from './settings.js';
 import { networkAllowed } from './tiles.js';
 import { installed } from './pack.js';
-import { topoBaseLayers, overlayLayers, aiLayers, labelLayers, trackColor, addIcons, DS_TRACK_LAYERS } from './dsstyle.js';
+import { topoBaseLayers, overlayLayers, aiLayers, labelLayers, trackColor, addIcons, DS_TRACK_LAYERS, AI_TRACKS, AI_GAPS } from './dsstyle.js';
 import { circleRing } from '../../core/geo.js';
 
 const RASTER_BASES = Object.keys(SOURCES).filter((id) => SOURCES[id].kind === 'base');
@@ -17,7 +17,7 @@ const APP_BASE = location.href.replace(/[?#].*$/, '').replace(/[^/]*$/, '');
 export const DS_OVERLAYS = {
   'ds-tracks': ['ds-tracks-casing', 'ds-tracks', 'ds-tracks-dash', 'ds-tracks-dot', 'ds-selected'],
   'ds-unmapped': ['ds-det-casing', 'ds-tracks-det'],
-  'ds-ai': ['ds-ai-casing', 'ds-tracks-ai', 'ds-ai-selected'],
+  'ds-ai': ['ds-ai-casing', 'ds-tracks-ai', 'ds-tracks-gap', 'ds-ai-selected'],
   'ds-detections': ['ds-detections'],
   'ds-routes': ['ds-routes'],
   'ds-contours': ['ds-contours', 'ds-contour-labels'],
@@ -109,13 +109,16 @@ function buildStyle() {
   );
   sources.plan = { type: 'geojson', data: EMPTY_FC };
   layers.push(
-    { id: 'plan-casing', type: 'line', source: 'plan', filter: ['==', ['geometry-type'], 'LineString'],
+    { id: 'plan-casing', type: 'line', source: 'plan', filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!=', ['get', 'gap'], 1]],
       layout: { 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['get', 'sel'] },
       paint: { 'line-color': '#000000', 'line-opacity': 0.6, 'line-width': ['case', ['==', ['get', 'sel'], 1], 11, 6] } },
-    { id: 'plan-line', type: 'line', source: 'plan', filter: ['==', ['geometry-type'], 'LineString'],
+    { id: 'plan-line', type: 'line', source: 'plan', filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!=', ['get', 'gap'], 1]],
       layout: { 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['get', 'sel'] },
       paint: { 'line-color': ['get', 'color'], 'line-width': ['case', ['==', ['get', 'sel'], 1], 7, 3.5],
         'line-opacity': ['case', ['==', ['get', 'sel'], 1], 1, 0.75] } },
+    // the selected route's gaps (joined AI tracks, nothing seen there): white dashes over the line
+    { id: 'plan-gap', type: 'line', source: 'plan', filter: ['==', ['get', 'gap'], 1],
+      paint: { 'line-color': '#ffffff', 'line-width': 3.5, 'line-dasharray': [1, 1.2] } },
     { id: 'plan-start', type: 'circle', source: 'plan', filter: ['==', ['geometry-type'], 'Point'],
       paint: { 'circle-radius': 9, 'circle-color': '#ffffff', 'circle-stroke-color': '#000000', 'circle-stroke-width': 4 } },
   );
@@ -209,14 +212,15 @@ export function applyLayers(map) {
   for (const l of DS_TRACK_LAYERS) {
     if (!map.getLayer(l)) continue;                                  // the AI layer exists only when unlocked
     map.setPaintProperty(l, 'line-color', color);
-    const o = l === 'ds-tracks-det' ? ov['ds-unmapped'] : l === 'ds-tracks-ai' ? ov['ds-ai'] : ov['ds-tracks'];
+    const o = l === 'ds-tracks-det' ? ov['ds-unmapped'] : l === 'ds-tracks-ai' || l === 'ds-tracks-gap' ? ov['ds-ai'] : ov['ds-tracks'];
     map.setPaintProperty(l, 'line-opacity', o?.opacity ?? 1);
   }
   map.setPaintProperty('ds-det-casing', 'line-color', topo ? '#ffffff' : '#000000');
   if (map.getLayer('ds-ai-casing')) {
     map.setPaintProperty('ds-ai-casing', 'line-color', topo ? '#ffffff' : '#000000');
     const aiFilter = ['>=', ['coalesce', ['get', 'aic'], 0], settings.aiMin ?? 0.4];
-    for (const l of ['ds-ai-casing', 'ds-tracks-ai']) map.setFilter(l, aiFilter);
+    for (const l of ['ds-ai-casing', 'ds-tracks-ai']) map.setFilter(l, ['all', AI_TRACKS, aiFilter]);
+    if (map.getLayer('ds-tracks-gap')) map.setFilter('ds-tracks-gap', ['all', AI_GAPS, aiFilter]);
   }
   map.setPaintProperty('ds-tracks-casing', 'line-color', topo ? '#ffffff' : '#000000');
   map.setPaintProperty('ds-tracks-casing', 'line-opacity', (topo ? 0.9 : 0.5) * (ov['ds-tracks']?.opacity ?? 1));

@@ -9,16 +9,19 @@ import { normPass } from '../../core/aicrypt.js';
 
 export const TEST_PASS = 'Test Pass 2468';
 
-// node, edge columns and two AI tracks: a road A-B, a track B-C, and AI lines C-D and D-E off the end of the track.
-const NODES = [[23.0880, 46.6700], [23.0920, 46.6705], [23.0950, 46.6720], [23.0975, 46.6740], [23.1000, 46.6748]];
+// node, edge columns and two AI tracks: a road A-B, a track B-C, AI lines C-D and D-E off the end of the track, and a
+// gap E-F the AI tracks were joined across.
+const NODES = [[23.0880, 46.6700], [23.0920, 46.6705], [23.0950, 46.6720], [23.0975, 46.6740], [23.1000, 46.6748],
+  [23.1012, 46.6760]];
 const EDGES = [
   { a: 0, b: 1, cls: 3, len: 310, risk: 0, ex: 80, pav: 1 },
   { a: 1, b: 2, cls: 0, len: 290, risk: 1, ex: 60, pav: 0 },
   { a: 2, b: 3, cls: 13, len: 300, risk: 1, ex: 55, pav: 0, aic: 82, id: 'ai0' },
-  { a: 3, b: 4, cls: 13, len: 210, risk: 2, ex: 45, pav: 0, aic: 41, id: 'ai1' },
+  { a: 3, b: 4, cls: 13, len: 210, risk: 1, ex: 45, pav: 0, aic: 41, id: 'ai1' },
+  { a: 4, b: 5, cls: 14, len: 160, risk: 1, ex: 30, pav: 0, aic: 41, id: 'gap0' },
 ];
 const CLASSES = ['track', 'path', 'bridleway', 'unclassified', 'residential', 'service', 'living_street', 'road', 'tertiary',
-  'secondary', 'primary', 'trunk', 'detected', 'ai'];
+  'secondary', 'primary', 'trunk', 'detected', 'ai', 'gap'];
 
 export function bundleData() {
   const cols = Object.fromEntries(['a', 'b', 'len', 'cls', 'risk', 'lvl', 'leg', 'ex', 'g', 'gdir', 'up', 'dn', 'tree', 'det', 'tt', 'pav', 'aic']

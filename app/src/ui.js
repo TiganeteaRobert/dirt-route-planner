@@ -9,7 +9,7 @@ import { COLOR_MODES, DS_TRACK_LAYERS } from './dsstyle.js';
 import { scoreEdge } from '../../core/scoring.js';
 import { installed as packInstalled, fetchManifest, install as installPack, uninstall as uninstallPack, loadGraphJson, loadPackJson, PACK_FILES, addBlobTiles, removeBlobTiles } from './pack.js';
 import { decodePolyline } from '../../core/polyline.js';
-import { loadGraph, nearestNode, generateRoutes, routeCoords, haversine } from '../../core/routing.js';
+import { loadGraph, generateRoutes, routeCoords, routeGaps, startNode, makeCost, haversine } from '../../core/routing.js';
 import { densify } from '../../core/geo.js';
 import { followTrack } from './livewire.js';
 import { downloader, estimateJob, sourceZooms } from './downloads.js';
@@ -165,7 +165,6 @@ async function renderLayers() {
       h('label', { class: `row${packUsable() || id === 'ds-ai' ? '' : ' dim'}` },
         h('input', { type: 'checkbox', checked: o.on, onchange: (e) => {
           o.on = e.target.checked; saveSettings(); applyLayers(app.map);
-          if (id === 'ds-ai') { app.graph = null; app.graphIndex = null; }        // routes follow what the map shows
           rerender();
         } }),
         h('span', { class: 'grow' }, name)),
@@ -257,7 +256,8 @@ function colorByControl() {
 const CLASS_NAMES = { track: 'Track', path: 'Path', bridleway: 'Bridleway', footway: 'Footway (no motors)', cycleway: 'Cycleway',
   steps: 'Steps', unclassified: 'Minor road', residential: 'Village street', service: 'Service road', tertiary: 'Tertiary road',
   secondary: 'Secondary road', primary: 'Primary road', trunk: 'Trunk road', motorway: 'Motorway', living_street: 'Living street',
-  detected: 'Road seen from above (not in OSM)', ai: 'Track the AI found (on no map)', mine: 'Your road' };
+  detected: 'Road seen from above (not in OSM)', ai: 'Track the AI found (on no map)',
+  gap: 'Gap between AI-found tracks (nothing seen)', mine: 'Your road' };
 const SAC = { hiking: 'T1 hiking', mountain_hiking: 'T2 mountain hiking', demanding_mountain_hiking: 'T3 demanding',
   alpine_hiking: 'T4 alpine', demanding_alpine_hiking: 'T5 demanding alpine', difficult_alpine_hiking: 'T6 difficult alpine' };
 
@@ -285,6 +285,7 @@ function renderInfo() {
     kv('MTB scale', p.mtb), kv('Trail visibility', p.vis), kv('4WD only', p.fwd), kv('Motor access', p.acc ?? 'not tagged'),
     kv('Gates / barriers on it', p.bar), kv('Ford', p.ford ? 'yes' : null), kv('Bridge', p.bridge ? 'yes' : null),
     p.class === 'ai' ? kv('AI score', p.aic != null ? `${Math.round(p.aic * 100)} % (how clearly the AI saw it, and how much it looks like a track rather than a field or forest edge)` : null) : null,
+    p.class === 'gap' ? kv('AI score', p.aic != null ? `${Math.round(p.aic * 100)} % (the lower of the tracks it joins)` : null) : null,
     p.class === 'ai' ? kv('Land along it', [p.grass ? `${Math.round(p.grass * 100)} % grassland` : null,
       p.crop ? `${Math.round(p.crop * 100)} % fields` : null].filter(Boolean).join(', ')) : null,
   ];
@@ -306,8 +307,12 @@ function renderInfo() {
       kv('OSM edits', [p.ver ? `version ${p.ver}` : null, p.yr ? `last edited ${p.yr}` : null, p.src ? `source: ${p.src}` : null].filter(Boolean).join(', ')),
       h('p', { class: 'note' }, 'Grades come from a 30 m elevation model: a short steep pitch can hide inside a gentle number.'));
   }
-  if (p.class === 'detected' || p.class === 'ai') {
-    out.push(h('p', { class: 'note' }, p.class === 'ai'
+  if (p.class === 'detected' || p.class === 'ai' || p.class === 'gap') {
+    out.push(h('p', { class: 'note' }, p.class === 'gap'
+      ? 'An AI-found track ends here and another track or road carries on nearby, in the direction it was heading. '
+        + 'The AI saw nothing in between (forest canopy often hides a track), so routes may cross this gap, drawn dotted. '
+        + 'The track may not go through: look at the imagery, and turn back if it does not.'
+      : p.class === 'ai'
       ? 'DirtScout\'s own AI found this line in Esri satellite imagery, and no map has it. It is most likely a farm or '
         + 'forest track, but it can be a field edge, a ditch, a fence line or private land, and its surface and access are '
         + 'unknown. Check it on the imagery before riding. Private: only on your phone, from your own file.'
@@ -327,6 +332,8 @@ function onMapClick(e) {
     app.planPick = false;
     app.plan.start = [e.lngLat.lng, e.lngLat.lat];
     app.plan.startMode = 'tap';
+    app.plan.results = [];
+    keepPlan();
     drawPlan();
     openPanel('plan');
     return;
@@ -352,8 +359,9 @@ function onMapClick(e) {
 const RISK_COLORS = ['#00e676', '#ffd600', '#ff1744'];
 const UNMAPPED = '#e040fb';
 
-// The unlocked AI bundle carries a whole route network with its tracks: use it while its layer is on.
-const aiRouting = () => !!app.ai?.meta && settings.overlays['ds-ai']?.on !== false;
+// The unlocked AI bundle carries a whole route network with its tracks (and the gaps joining them): routes and
+// Investigate use it unless Plan's switch is off (hiding the layer on the map does not change routes).
+const aiRouting = () => !!app.ai?.meta && settings.plan.useAi !== false;
 
 async function ensureGraph() {
   if (!app.graph) {
@@ -606,12 +614,20 @@ function planStart() {
   return [c.lng, c.lat];
 }
 
+// The plan's choices that last (settings.plan): length range, AI tracks, how the start is picked and the tapped spot.
+function keepPlan() {
+  const p = app.plan;
+  Object.assign(settings.plan, { kmMin: p.kmMin, kmMax: p.kmMax, startMode: p.startMode, start: p.start });
+  saveSettings();
+}
+
 function drawPlan() {
   const p = app.plan;
   const features = p.results.map((r, i) => ({
     type: 'Feature', properties: { color: PLAN_COLORS[i % PLAN_COLORS.length], sel: i === p.sel ? 1 : 0 },
     geometry: { type: 'LineString', coordinates: r.coords },
   }));
+  for (const g of p.results[p.sel]?.gaps ?? []) features.push({ type: 'Feature', properties: { gap: 1 }, geometry: { type: 'LineString', coordinates: g } });
   const s = p.results.length ? p.results[0].coords[0] : (p.startMode === 'tap' && p.start ? p.start : null);
   if (s) features.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: s } });
   setPlan(app.map, { type: 'FeatureCollection', features });
@@ -631,20 +647,21 @@ async function generatePlan() {
   try {
     const G = await ensureGraph();
     const [lon, lat] = planStart();
-    const start = nearestNode(G, lon, lat);
-    const off = haversine(lon, lat, G.lon[start], G.lat[start]);
-    if (off > 3000) throw new Error(`the start is ${fmtDist(off)} from the nearest mapped way (outside the riding area?)`);
     await new Promise((r) => setTimeout(r, 30));           // let the "working" state paint
-    const res = generateRoutes(G, start, {
-      length: p.length * 1000, shape: p.shape, climbs: p.climbs, minClimbGrade: p.minClimbGrade, avoidRed: p.avoidRed,
-      preferDirt: p.preferDirt, allowNoAccess: p.allowNoAccess, seed: p.seed,
-    });
-    p.results = res.map((r) => ({ ...r, coords: routeCoords(G, r.path) }));
+    const opts = { minLen: p.kmMin * 1000, maxLen: p.kmMax * 1000, shape: p.shape, climbs: p.climbs, minClimbGrade: p.minClimbGrade,
+      avoidRed: p.avoidRed, preferDirt: p.preferDirt, allowNoAccess: p.allowNoAccess, seed: p.seed };
+    // the start: the nearest mapped way where the car can wait (not an AI track), joined to the wider network
+    const s = startNode(G, lon, lat, makeCost(G, opts));
+    if (!s || s.off > 3000) throw new Error(`the start is ${s ? fmtDist(s.off) : 'far'} from the nearest mapped way (outside the riding area?)`);
+    const res = generateRoutes(G, s.node, opts);
+    p.results = res.map((r) => ({ ...r, coords: routeCoords(G, r.path), gaps: routeGaps(G, r.path) }));
+    p.startOff = s.off;
     p.sel = 0;
     p.seed += 1;
     drawPlan();
     if (p.results.length) fitCoords(p.results[0].coords);
-    else toast('No route fits: try another length, fewer climbs, or allow yellow tracks.');
+    if (!p.results.length) toast('No route from here: try another length, fewer climbs, or allow red tracks.', { ms: 6000 });
+    else if (!p.results[0].fits) toast(`No ${p.kmMin}-${p.kmMax} km ${p.shape === 'loop' ? 'loop' : 'ride'} from here: showing the closest. Try a wider range or another start.`, { ms: 7000 });
   } catch (e) {
     toast(`Cannot plan: ${e.message}`, { ms: 7000 });
   } finally {
@@ -658,25 +675,50 @@ function seg(options, value, onPick) {
     h('button', { class: `btn small${v === value ? ' on' : ''}`, onclick: () => onPick(v) }, label)));
 }
 
+// Two knobs on one track: a range from lo to hi, at least `gap` apart. onInput(lo, hi) while dragging, onChange after.
+function rangeSlider({ min, max, step = 1, lo, hi, gap = 1, label, onInput, onChange }) {
+  const fillBar = h('i');
+  const a = h('input', { type: 'range', min, max, step, value: lo, 'aria-label': `${label}: from` });
+  const b = h('input', { type: 'range', min, max, step, value: hi, 'aria-label': `${label}: to` });
+  const paint = () => {
+    const pct = (v) => ((v - min) / (max - min)) * 100;
+    fillBar.style.left = `${pct(+a.value)}%`;
+    fillBar.style.right = `${100 - pct(+b.value)}%`;
+    a.style.zIndex = +a.value > (min + max) / 2 ? 3 : 1;     // when the knobs meet, the one that can still move is on top
+  };
+  a.addEventListener('input', () => { if (+a.value > +b.value - gap) a.value = +b.value - gap; paint(); onInput(+a.value, +b.value); });
+  b.addEventListener('input', () => { if (+b.value < +a.value + gap) b.value = +a.value + gap; paint(); onInput(+a.value, +b.value); });
+  for (const x of [a, b]) x.addEventListener('change', () => onChange(+a.value, +b.value));
+  paint();
+  return h('div', { class: 'range2' }, h('div', { class: 'range2-track' }, fillBar), a, b);
+}
+
 function renderPlan() {
   const p = app.plan;
   const set = (k) => (v) => { p[k] = v; rerender(); };
   const startLabel = p.startMode === 'gps' ? (gps.last ? 'my position' : 'my position (waiting for GPS)')
-    : p.startMode === 'tap' ? (p.start ? `${p.start[1].toFixed(4)}, ${p.start[0].toFixed(4)}` : 'tap the map') : 'the map centre';
+    : p.startMode === 'tap' ? (p.start ? `${p.start[1].toFixed(4)}, ${p.start[0].toFixed(4)}` : 'tap the map where you leave the car') : 'the map centre';
+  const lenText = () => `Length: ${p.kmMin}-${p.kmMax} km`;
   const out = [
     h('div', { class: 'label' }, `Start: ${startLabel}`),
     seg([['gps', 'My position'], ['centre', 'Map centre'], ['tap', 'Tap the map']], p.startMode, (v) => {
       p.startMode = v;
+      keepPlan();
       if (v === 'gps' && !gps.on) locate();
-      if (v === 'tap') { app.planPick = true; closePanel(); toast('Tap the map where the ride starts.'); return; }
+      if (v === 'tap') { app.planPick = true; closePanel(); toast('Tap the map where you leave the car.'); return; }
       rerender();
     }),
-    h('div', { class: 'label', id: 'plan-len' }, `Length: about ${p.length} km`),
-    h('label', { class: 'slider', style: 'padding-left:0' }, h('input', {
-      type: 'range', min: 2, max: 60, step: 1, value: p.length,
-      oninput: (e) => { p.length = +e.target.value; const l = $('plan-len'); if (l) l.textContent = `Length: about ${p.length} km`; },
-      onchange: () => rerender(),
-    })),
+    p.startMode === 'tap' && p.start ? h('button', { class: 'btn small', onclick: () => { app.planPick = true; closePanel(); toast('Tap the map where you leave the car.'); } }, 'Move the start') : null,
+    h('div', { class: 'label', id: 'plan-len' }, lenText()),
+    rangeSlider({
+      min: 2, max: 100, lo: p.kmMin, hi: p.kmMax, label: 'Length in km',
+      onInput: (lo, hi) => { p.kmMin = lo; p.kmMax = hi; const l = $('plan-len'); if (l) l.textContent = lenText(); },
+      onChange: () => keepPlan(),
+    }),
+    app.ai?.meta ? toggleRow(`Use the tracks the AI found (score at least ${Math.round((settings.aiMin ?? 0.4) * 100)} %, set in Layers)`,
+      settings.plan.useAi !== false, (v) => { settings.plan.useAi = v; saveSettings(); app.graph = null; app.graphIndex = null; rerender(); }) : null,
+    app.ai?.meta && settings.plan.useAi !== false ? h('p', { class: 'note' }, 'Where an AI track stops short of another track or road it points at, '
+      + 'routes may cross the gap: drawn with white dashes on the route. Nothing was seen there, so check those spots on the imagery.') : null,
     seg([['loop', 'Loop'], ['out-back', 'Out and back']], p.shape, set('shape')),
     h('div', { class: 'label' }, 'Hill climbs'),
     seg([[0, 'None'], [1, '1'], [2, '2'], [3, '3']], p.climbs, set('climbs')),
@@ -689,6 +731,12 @@ function renderPlan() {
     h('p', { class: 'note' }, 'Routes use the area pack: the risk colours, steepness (approximate), dirt vs tarmac and access tags. '
       + 'Check each one on the imagery before riding.'),
   ];
+  if (p.results.length && p.startMode !== 'centre' && (p.startOff ?? 0) > 150) {
+    out.push(h('p', { class: 'note' }, `The routes start on the nearest mapped way, ${fmtDist(p.startOff)} from your start.`));
+  }
+  if (p.results.length && !p.results[0].fits) {
+    out.push(h('p', { class: 'note warn' }, `No ${p.kmMin}-${p.kmMax} km route from here: these are the closest.`));
+  }
   p.results.forEach((r, i) => {
     const s = r.stats;
     const color = PLAN_COLORS[i % PLAN_COLORS.length];
@@ -701,7 +749,9 @@ function renderPlan() {
       `${s.climbs.length} climb${s.climbs.length === 1 ? '' : 's'}${s.climbs.length ? ` (steepest about ${Math.round(Math.max(...s.climbs.map((c) => c.grade)))} %)` : ''}`,
       `${pct(s.dirt)} dirt`, s.reused > 0.05 ? `${pct(s.reused)} ridden twice` : null,
       s.restricted > 0 ? `${pct(s.restricted)} restricted access` : null,
+      s.ai > 0 ? `${pct(s.ai)} on AI-found tracks` : null,
     ].filter(Boolean).join(' · ')),
+    s.gaps ? h('div', { class: 'note flag' }, `${s.gaps} gap${s.gaps === 1 ? '' : 's'} where nothing was seen (${fmtDist(s.gapLen)}): white dashes, check them`) : null,
     h('div', { class: 'riskbar' }, h('i', { style: `width:${s.green * 100}%;background:#00c853` }),
       h('i', { style: `width:${s.yellow * 100}%;background:#ffd600` }), h('i', { style: `width:${s.red * 100}%;background:#ff1744` })),
     h('div', { class: 'note' }, `green ${pct(s.green)} · yellow ${pct(s.yellow)} · red ${pct(s.red)}`),
@@ -710,7 +760,7 @@ function renderPlan() {
       btn('Save', async () => {
         const d = new Date();
         const name = `Plan ${fmtDist(s.len)} ${d.toLocaleDateString()} #${i + 1}`;
-        const t = await savePlanned(name, r.coords, s, { length: p.length, shape: p.shape, climbs: p.climbs }, color);
+        const t = await savePlanned(name, r.coords, s, { kmMin: p.kmMin, kmMax: p.kmMax, shape: p.shape, climbs: p.climbs, ai: aiRouting() }, color);
         await app.refreshTracks();
         toast(`Saved "${name}" in Tracks`, { action: 'GPX', onAction: () => shareGPX(t) });
       }, 'primary'),
@@ -927,7 +977,7 @@ function aiCard() {
   const err = aiError ? h('p', { class: 'note warn' }, aiError) : null;
   if (app.ai?.stale) {
     return h('div', { class: 'card', id: 'ai-card' },
-      h('p', { class: 'note' }, 'Your AI tracks need a one-time update to the new format (smoother map). It downloads with your saved passphrase.'),
+      h('p', { class: 'note' }, 'Your AI tracks need a one-time update: the new file fixes routes that jumped across the map and joins the tracks across short gaps. It downloads with your saved passphrase.'),
       progress, err,
       aiJob ? null : h('div', { class: 'row-btns' }, btn('Update', () => runAi(null), 'primary'), btn('Remove', removeAi)));
   }
@@ -1355,8 +1405,10 @@ export function initUI(appState) {
   app = appState;
   app.dlForm = { sources: ['ms-earth', 'dem'], areaType: 'bbox', trackId: null, buffer: 300, zmin: 10, zmax: 16 };
   if (app.debug) app.debug.ensureGraph = ensureGraph;          // for the e2e tests
-  app.plan = { startMode: 'gps', start: null, length: 4, shape: 'loop', climbs: 1, minClimbGrade: 15, avoidRed: true,
-    preferDirt: true, allowNoAccess: false, results: [], sel: 0, busy: false, seed: 1 };
+  const kept = settings.plan;
+  app.plan = { startMode: kept.startMode ?? 'gps', start: kept.start ?? null, kmMin: kept.kmMin ?? 30, kmMax: kept.kmMax ?? 40,
+    shape: 'loop', climbs: 1, minClimbGrade: 15, avoidRed: true, preferDirt: true, allowNoAccess: false, results: [], sel: 0,
+    busy: false, seed: 1 };
   app.markTet = false;
   app.follow = false;
   app.recLine = [];

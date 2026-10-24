@@ -6,8 +6,9 @@ File: b"DSAI" | 1 | salt (16) | iv (12) | PBKDF2 iterations (u32 BE) | ciphertex
 Plaintext (version 2): b"DSB2" | three u32 BE lengths | meta.json | graph.json.gz | tiles.pmtiles
   meta     {v: 2, version, built, base, stats: {lines, km}, hist: [[score from, lines, km], ...]}
   graph    the private routing graph (graph.py ... graph_pack.py run with DS_AI=1), loaded by the app only to route
-  tiles    the AI-found tracks as vector tiles z12-14, layer "ai" (the map draws pre-cut tiles: as one GeoJSON the
-           ~50k lines took the phone's map seconds to redraw at every move)
+  tiles    the AI-found tracks and the gaps they were joined across (class "ai" / "gap") as vector tiles z12-14,
+           layer "ai" (the map draws pre-cut tiles: as one GeoJSON the ~50k lines took the phone's map seconds to
+           redraw at every move)
     uv run --with cryptography --with numpy --with shapely --with mapbox-vector-tile --with pmtiles python pipeline/ai_bundle.py
 """
 import gzip
@@ -56,11 +57,11 @@ def ai_layer():
     L = Layer("ai", "line")
     for f in read_fc(AI / "edges_evidence.geojson"):
         p = f["properties"]
-        if p["highway"] != "ai":
+        if p["highway"] not in ("ai", "gap"):
             continue
         sc = scores.get(p["id"])
         L.add(to_geom(f["geometry"]), {
-            "class": "ai", "id": p["id"], "len": p["len"], "aic": p.get("aic"), "conf": p.get("aiconf"),
+            "class": p["highway"], "id": p["id"], "len": p["len"], "aic": p.get("aic"), "conf": p.get("aiconf"),
             "line": p.get("ailine"), "det": p.get("det"), "tp": p.get("tp"), "tn": p.get("tn"), "tree": p.get("tree"),
             "g50": p.get("g50"), "g100": p.get("g100"), "gall": p.get("gall"), "gdir": p.get("gdir"), "up": p.get("up"),
             "dn": p.get("dn"), "prot": 1 if p.get("prot") else None, "crop": p.get("aicrop"), "grass": p.get("aigrass"),
@@ -73,10 +74,11 @@ def main():
     t0 = time.time()
     graph_text = (AI / "graph.json").read_text()
     L = ai_layer()
-    aic = [p.get("aic") or 0 for p in L.props]
-    lens = [p["len"] for p in L.props]
-    hist = [[t, sum(1 for a in aic if a >= t - 1e-9), round(sum(m for a, m in zip(aic, lens) if a >= t - 1e-9) / 1000)]
-            for t in HIST]
+    tracks = [p for p in L.props if p["class"] == "ai"]
+    lens = [p["len"] for p in tracks]
+    line = lambda p: p["id"].split(".")[0]          # a track split where a gap joins it is still one track
+    hist = [[t, len({line(p) for p in tracks if (p.get("aic") or 0) >= t - 1e-9}),
+             round(sum(p["len"] for p in tracks if (p.get("aic") or 0) >= t - 1e-9) / 1000)] for t in HIST]
     tiles = io.BytesIO()
     sizes, _, n_tiles = write_pmtiles([L], tiles, ZMIN, ZMAX, bbox_buffer(BBOX, 1000), "DirtScout AI tracks (private)",
                                       "Derived from Esri World Imagery: private, personal use only", t0=t0)
@@ -85,7 +87,9 @@ def main():
     digest = hashlib.sha256(graph_gz + tiles).hexdigest()[:6]
     base = json.loads((AREA / "pack.json").read_text())["version"] if (AREA / "pack.json").exists() else None
     meta = {"v": 2, "version": time.strftime("%Y-%m-%d") + "." + digest, "built": int(time.time()), "base": base,
-            "stats": {"lines": len(L.props), "km": round(sum(lens) / 1000)}, "hist": hist}
+            "stats": {"lines": len({line(p) for p in tracks}), "km": round(sum(lens) / 1000),
+                      "gaps": len(L.props) - len(lens),
+                      "gapkm": round(sum(p["len"] for p in L.props if p["class"] == "gap") / 1000)}, "hist": hist}
     meta_b = json.dumps(meta, separators=(",", ":")).encode()
     plain = b"DSB2" + struct.pack(">III", len(meta_b), len(graph_gz), len(tiles)) + meta_b + graph_gz + tiles
     blob = encrypt(plain, passphrase())

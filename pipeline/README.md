@@ -31,7 +31,7 @@ uv run --with numpy --with scipy --with contourpy --with shapely python contours
 uv run --with duckdb --with shapely python detections.py
 uv run --with rasterio --with numpy python landcover.py
 uv run --with numpy python traces.py        # slow (Cluj is dense); --from-cache builds traces.npz from pages so far
-uv run python graph.py
+uv run --with numpy --with shapely python graph.py
 uv run --with numpy --with scipy --with shapely python evidence.py
 node score.mjs
 uv run --with numpy --with shapely --with mapbox-vector-tile --with pmtiles python build_tiles.py
@@ -66,7 +66,7 @@ segmentation-models-pytorch 0.5.0); set `TORCH_HOME` to a folder on E: so the Im
 | A3 | `ai_train.py <fold>` | model_f0-2.pt: cross-fitting, each model never trains on its own fold (~6.5 km blocks) |
 | A4 | `ai_infer.py [fold]` | pred/ (probability per patch; each fold predicted by its own model) |
 | A5 | `ai_vectorize.py` | ai_lines.geojson: lines not within 15 m of a known road, each with a score (model strength x how track-like the imagery is across it); traced pieces cached in pieces_*.npz |
-| A6 | `DS_AI=1` graph.py, evidence.py, score.mjs, graph_pack.py | edges / evidence / scores / graph.json with class `ai` |
+| A6 | `DS_AI=1` graph.py, evidence.py, score.mjs, graph_pack.py | edges / evidence / scores / graph.json with class `ai`, and class `gap` where an AI track that ends in nothing is joined across to what it points at (another track's end facing it, up to 250 m, or a way's side, up to 160 m; never across another way, a river or a steep slope); graph_pack stops when an edge's ends are not at its nodes |
 | A7 | `ai_bundle.py` | ai.enc (AES-256-GCM, PBKDF2 key): meta, the gzipped graph, the lines as vector tiles z12-14; a copy in app/public/pack/ |
 
 ```
@@ -78,7 +78,7 @@ uv run --with numpy --with pillow --with shapely python ai_labels.py
 ../.venv-ml/Scripts/python ai_train.py 2
 ../.venv-ml/Scripts/python ai_infer.py
 uv run --with numpy --with scipy --with shapely --with scikit-image --with pillow python ai_vectorize.py   # DS_AI_DEBUG=1: dropped lines too
-DS_AI=1 uv run python graph.py
+DS_AI=1 uv run --with numpy --with scipy --with shapely python graph.py
 DS_AI=1 uv run --with numpy --with scipy --with shapely python evidence.py
 DS_AI=1 node score.mjs
 DS_AI=1 uv run python graph_pack.py
@@ -92,6 +92,13 @@ read the cached pieces (minutes instead of ~15); delete pieces_*.npz after a new
 
 The bundle carries a whole routing graph, so it keeps working when the public pack changes; rebuild it (A6-A7) with
 each new pack so both use the same OSM data, and upload it to the newest `pack-*` release (the workflow serves `*.enc`).
+When the graph's layout changes in a way phones must not keep, raise `AI_FORMAT` in app/src/aibundle.js: a phone with
+another format fetches the file again with its saved passphrase.
+
+Gaps (2026-10-24: 12,447, 1,121 km; median 84 m, one in ten over 150 m): the model misses tracks under canopy and
+faint stretches, so an AI track that stops short of another track or a road it points at is joined across. On the
+imagery most short gaps are clear continuations; some long ones are chords across fields. Routes cost a gap about
+twice a track and draw it with white dashes; the map shows gaps as dots.
 
 ## What the evidence means (and does not)
 

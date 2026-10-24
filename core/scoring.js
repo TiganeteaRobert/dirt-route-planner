@@ -3,8 +3,10 @@
 // Starting weights from the plan (HANDOFF section 12), to be tuned with the rider's feedback.
 //
 // Input: edge properties as in the area pack's "tracks" layer (class, tt, smooth, sac, mtb, vis, acc, det, tp, tn,
-// tree, g50, g100, gall, routes, src, ver, yr, len; aic = the AI's confidence 0-1 for class "ai", the owner's private
-// layer) plus optional extras {tet: overlap share 0-1 with TET/ACT tracks}.
+// tree, g50, g100, gall, routes, src, ver, yr, len; aic = the AI's score 0-1 for class "ai" and "gap" (a stretch the
+// AI tracks were joined across), the owner's private layer) plus optional extras {tet: overlap share 0-1 with TET/ACT
+// tracks}. The owner picks how sure the AI must be with the app's slider, so those classes are yellow (unknown) at
+// best and red only when hard to ride, whatever their score.
 
 const ROADS = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary']);
 const MINOR = new Set(['unclassified', 'residential', 'living_street', 'service', 'road']);
@@ -40,11 +42,15 @@ export function scoreEdge(p, extras = {}) {
     exists = 0.35 + 0.25 * Math.min(1, p.aic ?? 0.5);
     add('ai', `found by DirtScout's AI in satellite imagery (${Math.round((p.aic ?? 0.5) * 100)} % sure), on no map`, Math.round(exists * 100) / 100);
   }
+  else if (cls === 'gap') {
+    exists = 0.3;
+    add('gap', 'a gap the AI-found tracks were joined across: nothing was seen here (forest canopy?), so the track may not go through', 0.3);
+  }
   else { exists = 0.35; add('path', `mapped as a ${cls ?? 'way'}`, 0.35); }
 
   if (p.src && /survey|gps|gnss/i.test(p.src)) { exists += 0.1; add('survey', 'mapped from a ground survey or GPS', 0.1); }
   if ((p.ver ?? 0) >= 3) { exists += 0.05; add('edits', `edited ${p.ver} times in OSM`, 0.05); }
-  if (p.det != null && cls !== 'detected' && cls !== 'ai') {
+  if (p.det != null && cls !== 'detected' && cls !== 'ai' && cls !== 'gap') {
     if (p.det >= 0.7) { exists += 0.25; add('det', `seen from above along ${Math.round(p.det * 100)} % of it`, 0.25); }
     else if (p.det >= 0.3) { exists += 0.1; add('det', `seen from above along ${Math.round(p.det * 100)} % of it`, 0.1); }
   }
@@ -84,10 +90,12 @@ export function scoreEdge(p, extras = {}) {
   if (p.prot) add('protected', 'inside a protected area: check the rules', 'legal');
   if (cls === 'detected') add('unknown', 'not in OSM: name, surface and access unknown', 'legal');
   if (cls === 'ai') add('unknown', 'on no map: surface and access unknown; it could be private, a field edge or a ditch', 'legal');
+  if (cls === 'gap') add('unknown', 'on no map and not seen: check it on the ground', 'legal');
 
   // ---- class ----
   let cls3;
-  if (exists < 0.5 || level === 2) cls3 = 2;
+  if (cls === 'ai' || cls === 'gap') cls3 = level === 2 ? 2 : 1;
+  else if (exists < 0.5 || level === 2) cls3 = 2;
   else if (exists < 0.75 || level === 1) cls3 = 1;
   else cls3 = 0;
   return { exists: Math.round(exists * 100) / 100, level, legal, cls: cls3, name: CLASS_NAMES[cls3], reasons };

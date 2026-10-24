@@ -59,7 +59,7 @@ export function trackColor(mode) {
         ['motorway', 'trunk'], '#ff5252', 'primary', '#ffab40', 'secondary', '#ffd740', 'tertiary', '#ffffff',
         ['unclassified', 'residential', 'living_street', 'service', 'road', 'raceway'], '#eeeeee',
         'track', ['match', ['coalesce', ['get', 'tt'], 0], 1, '#ffd180', 2, '#ffb74d', 3, '#ff9800', 4, '#ef6c00', 5, '#bf360c', '#ff9800'],
-        ['path', 'bridleway'], '#ff4081', 'detected', '#00e5ff', 'ai', '#76ff03',
+        ['path', 'bridleway'], '#ff4081', 'detected', '#00e5ff', ['ai', 'gap'], '#76ff03',
         ['footway', 'cycleway', 'steps', 'pedestrian'], '#ea80fc', '#cccccc'];
   }
 }
@@ -133,14 +133,19 @@ export function overlayLayers() {
 }
 
 // The owner's private AI-found tracks: vector tiles (layer "ai", z12-14) from the unlocked ai.enc, source 'ai'
-// (pmtiles://ai, app/src/aibundle.js). Added to the map only once unlocked (mapview.setAiTiles).
+// (pmtiles://ai, app/src/aibundle.js). Added to the map only once unlocked (mapview.setAiTiles). Class "gap": where
+// the tracks were joined across a stretch the AI saw nothing (dots).
+export const AI_TRACKS = ['!=', ['get', 'class'], 'gap'];
+export const AI_GAPS = ['==', ['get', 'class'], 'gap'];
 export function aiLayers() {
   const src = { source: 'ai', 'source-layer': 'ai' };
   return [
-    { id: 'ds-ai-casing', type: 'line', ...src, minzoom: 12, layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+    { id: 'ds-ai-casing', type: 'line', ...src, minzoom: 12, filter: AI_TRACKS, layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#000000', 'line-opacity': 0.45, 'line-width': lineWidth(1.7) } },
-    { id: 'ds-tracks-ai', type: 'line', ...src, minzoom: 12, layout: { visibility: 'none', 'line-join': 'round' },
+    { id: 'ds-tracks-ai', type: 'line', ...src, minzoom: 12, filter: AI_TRACKS, layout: { visibility: 'none', 'line-join': 'round' },
       paint: { 'line-color': trackColor('type'), 'line-width': lineWidth(), 'line-dasharray': [2.4, 1] } },
+    { id: 'ds-tracks-gap', type: 'line', ...src, minzoom: 12, filter: AI_GAPS, layout: { visibility: 'none', 'line-cap': 'round' },
+      paint: { 'line-color': trackColor('type'), 'line-width': lineWidth(0.9), 'line-dasharray': [0.1, 1.8] } },
     { id: 'ds-ai-selected', type: 'line', ...src, filter: ['==', ['get', 'id'], '__none__'],
       layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#00b0ff', 'line-width': lineWidth(2.6), 'line-opacity': 0.75 } },
@@ -225,4 +230,4 @@ export function addIcons(map) {
   }
 }
 
-export const DS_TRACK_LAYERS = ['ds-tracks', 'ds-tracks-dash', 'ds-tracks-dot', 'ds-tracks-det', 'ds-tracks-ai'];
+export const DS_TRACK_LAYERS = ['ds-tracks', 'ds-tracks-dash', 'ds-tracks-dot', 'ds-tracks-det', 'ds-tracks-ai', 'ds-tracks-gap'];

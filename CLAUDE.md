@@ -20,7 +20,10 @@ and the research live in `private/HANDOFF.md` (gitignored). Read it before start
   a private graph (`DS_AI=1`), all in `data/ai/`. The phone gets them only as `pack/ai.enc` (AES-GCM, passphrase in
   `private/ai_passphrase.txt`), opened in Offline > "Tracks the AI found" (`app/src/aibundle.js`, `core/aicrypt.js`):
   vector tiles for the map (pmtiles://ai, added once unlocked), the graph read only when routing; a slider under the
-  layer in Layers sets the minimum score (default 0.4). `tests/e2e/ai.e2e.mjs` checks it with a test bundle
+  layer in Layers sets the minimum score (default 0.4); Plan's switch "Use the tracks the AI found" decides whether
+  routes use them (hiding the layer does not). Class `gap` joins AI tracks that end in nothing (dots on the map, white
+  dashes on a route). Every pass that adds nodes in pipeline/graph.py must take new ids (`next_ids`): a reused id made
+  routes jump across the map (2026-10-24); graph_pack.py now stops on it. `tests/e2e/ai.e2e.mjs` checks it with a test bundle
   (`tests/fixtures/aibundle.mjs`, tiles from `make_ai_tiles.py`). A GeoJSON of ~50k lines made the map redraw take ~20 s:
   keep big line sets in tiles.
 
@@ -43,8 +46,11 @@ https://tiganetearobert.github.io/dirt-route-planner/
 M1-M5 are built and tested on the PC (tests/e2e/m1, m2, m4, m5) and deployed. They wait for the owner's phone test
 and feedback. The risk weights (core/scoring.js) and the route costs (core/routing.js) are first calibrations. The ten
 sample rides (tools/samples.mjs -> pack samples.json) are the review set before M6 (100 tracks).
-The AI-found tracks (7,725 tracks, ~900 km, deployed 2026-10-23) wait for the owner's verdict: tune the filters in
-pipeline/ai_vectorize.py from what they report (terraces, field edges and shores are the known false lines).
+The AI-found tracks (v2: 50,385 tracks, 8,063 km, plus 12,447 gaps, 1,121 km; 2026-10-24) wait for the owner's verdict:
+tune the filters in pipeline/ai_vectorize.py from what they report (terraces, field edges and shores are the known false
+lines). Plan (2026-10-24): a length range with two knobs (kept with the start in settings.plan), the start on the
+mapped way nearest the tap (not an AI track, not an island), waypoints only where a ride can pass through (no
+dead-end branches), loops that ride over a third of themselves twice ranked last; waits for the owner's ride feedback.
 When the owner asks to "investigate" a GPX: `node tools/investigate.mjs <gpx>`, then
 `uv run --with pillow python tools/imagery_crops.py private/reports/<name>`, look at the flag-*.jpg images, and report
 the verdict, risks with km markers and ways around. The imagery stays local (terms).
