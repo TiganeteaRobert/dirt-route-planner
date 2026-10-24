@@ -1,7 +1,10 @@
 // Panels (one bottom sheet at a time), the toolbar, status pills and toasts.
 import { SOURCES, LOCAL_OVERLAYS, SLOPE_CLASSES, OFFLINE_SOURCES, APP_NAME, DS_BASE, DS_OVERLAY_LIST } from './config.js';
 import { settings, saveSettings, defaultArea } from './settings.js';
-import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw, setAiTiles } from './mapview.js';
+import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw, setAiTiles, setCursor } from './mapview.js';
+import { initBuilder, startBuilder, builderClick, renderRoute, builderActive, leave as leaveBuilder } from './builder.js';
+import { profileSection } from './profileview.js';
+import { elevationProfile } from '../../core/profile.js';
 import { unlock as aiUnlock, update as aiUpdate, removeStored as aiRemove, loadAiGraph } from './aibundle.js';
 import { augmentGraph, filterAiEdges } from '../../core/usergraph.js';
 import { buildIndex, investigate } from '../../core/investigate.js';
@@ -10,7 +13,7 @@ import { scoreEdge } from '../../core/scoring.js';
 import { installed as packInstalled, fetchManifest, install as installPack, uninstall as uninstallPack, loadGraphJson, loadPackJson, PACK_FILES, addBlobTiles, removeBlobTiles } from './pack.js';
 import { decodePolyline } from '../../core/polyline.js';
 import { loadGraph, generateRoutes, routeCoords, routeGaps, startNode, makeCost, haversine } from '../../core/routing.js';
-import { densify } from '../../core/geo.js';
+import { densify, lineLength } from '../../core/geo.js';
 import { followTrack } from './livewire.js';
 import { downloader, estimateJob, sourceZooms } from './downloads.js';
 import * as db from './db.js';
@@ -36,6 +39,8 @@ const PANELS = {
   record: ['Ride', renderRecord],
   plan: ['Plan a ride', renderPlan],
   inv: ['Investigate', renderInvestigation],
+  route: ['Your route', renderRoute],
+  profile: ['Elevation', renderProfile],
   more: ['More', renderMore],
   info: ['Track info', renderInfo],
 };
@@ -53,6 +58,7 @@ export function openPanel(name) {
 
 export function closePanel() {
   if (current === 'info') { setSelected(app.map, null); app.selected = null; }
+  setCursor(app.map, null);
   current = null;
   $('sheet').hidden = true;
   for (const b of document.querySelectorAll('#toolbar [data-sheet]')) b.classList.remove('active');
@@ -327,6 +333,7 @@ function renderInfo() {
 }
 
 function onMapClick(e) {
+  if (app.build) { builderClick(e); return; }
   if (app.draw) { addDrawPoint(e); return; }
   if (app.planPick) {
     app.planPick = false;
@@ -395,10 +402,12 @@ async function runInvestigation(t) {
     for (const a of res.alternatives) features.push({ type: 'Feature', properties: { alt: 1 }, geometry: { type: 'LineString', coordinates: a.coords } });
     setInvestigation(app.map, { type: 'FeatureCollection', features });
     fitCoords(P);
+    const inv = app.inv;
+    inv.prof = (await elevationProfile(res.points, elevationAt)) ?? false;      // the chart, once the map shows the result
   } catch (e) {
     toast(`Cannot investigate: ${e.message}`, { ms: 7000 });
   } finally {
-    app.inv.busy = false;
+    if (app.inv) app.inv.busy = false;                // (cleared from the map meanwhile: nothing to update)
     rerender();
   }
 }
@@ -429,6 +438,7 @@ function renderInvestigation() {
       h('i', { style: `width:${r.shares.unmapped * 100}%;background:${UNMAPPED}` })),
     h('div', { class: 'note' }, `green ${pct(r.shares.green)} · yellow ${pct(r.shares.yellow)} · red ${pct(r.shares.red)} · not on any mapped way ${pct(r.shares.unmapped)}`
       + (r.shares.legalNo ? ` · closed to motors ${pct(r.shares.legalNo)}` : '')),
+    ...(inv.prof ? [h('h3', {}, 'Elevation'), ...profileSection(app.map, inv.prof)] : []),
   ];
   const item = (from, to, text, cls = '') => h('button', { class: `row find ${cls}`, onclick: () => { flyToKm(from / 1000); } },
     h('span', { class: 'km' }, `km ${km(from)}–${km(to)}`), h('span', { class: 'grow' }, text));
@@ -474,6 +484,7 @@ function renderInvestigation() {
 const drawCoords = (d) => (d.taps.length ? [d.taps[0].p, ...d.parts.flat()] : []);
 
 function startDraw() {
+  if (builderActive()) { leaveBuilder(); if (builderActive()) return; }
   app.draw = { taps: [], parts: [], busy: false };
   closePanel();
   $('drawbar').hidden = false;
@@ -700,6 +711,10 @@ function renderPlan() {
     : p.startMode === 'tap' ? (p.start ? `${p.start[1].toFixed(4)}, ${p.start[0].toFixed(4)}` : 'tap the map where you leave the car') : 'the map centre';
   const lenText = () => `Length: ${p.kmMin}-${p.kmMax} km`;
   const out = [
+    btn('Make my own route', () => { if (app.draw) endDraw(); startBuilder(); }, 'big'),
+    h('p', { class: 'note' }, 'Tap points on the map: each holds on to the nearest track and the route follows the tracks between them. '
+      + 'Drag a point to move it, tap the line to add one, tap point 1 to come back to the start.'),
+    h('h3', {}, 'Or let DirtScout make loops'),
     h('div', { class: 'label' }, `Start: ${startLabel}`),
     seg([['gps', 'My position'], ['centre', 'Map centre'], ['tap', 'Tap the map']], p.startMode, (v) => {
       p.startMode = v;
@@ -757,6 +772,7 @@ function renderPlan() {
     h('div', { class: 'note' }, `green ${pct(s.green)} · yellow ${pct(s.yellow)} · red ${pct(s.red)}`),
     h('div', { class: 'row-btns' },
       btn('Show', () => { p.sel = i; drawPlan(); fitCoords(r.coords); closePanel(); }),
+      btn('Profile', () => { p.sel = i; drawPlan(); openProfile(`Route ${i + 1}`, r.coords); }),
       btn('Save', async () => {
         const d = new Date();
         const name = `Plan ${fmtDist(s.len)} ${d.toLocaleDateString()} #${i + 1}`;
@@ -1186,7 +1202,9 @@ async function renderTracks() {
       ].filter(Boolean).join(' · ')),
       h('div', { class: 'row-btns' },
         t.stats.bbox ? btn('Show', () => { fitTrack(t); closePanel(); }) : null,
-        lines ? btn('Investigate', () => runInvestigation(t), 'primary') : null,
+        t.plan?.built ? btn('Edit', () => { if (app.draw) endDraw(); startBuilder(t); }, 'primary') : null,
+        lines ? btn('Profile', () => openProfile(t.name, trackLines(t).flat())) : null,
+        lines ? btn('Investigate', () => runInvestigation(t), t.plan?.built ? '' : 'primary') : null,
         lines ? btn('Save detail offline', () => { presetCorridor(t.id); openPanel('downloads'); }) : null,
         btn('GPX', async () => { const r = await shareGPX(t); if (r === 'downloaded') toast('GPX saved to Downloads'); }),
         btn('Rename', async () => {
@@ -1202,6 +1220,27 @@ async function renderTracks() {
         }, 'danger-text'),
       )));
   }
+  return out;
+}
+
+// ---------------------------------------------------------------- Elevation profile of a track or a route
+
+async function openProfile(title, coords) {
+  const p = { title, coords, profile: null, len: lineLength(coords) };
+  app.prof = p;
+  openPanel('profile');
+  fitCoords(coords);
+  p.profile = (await elevationProfile(coords, elevationAt)) ?? false;
+  if (app.prof === p && current === 'profile') rerender();
+}
+
+function renderProfile() {
+  const p = app.prof;
+  if (!p) return [h('p', { class: 'note' }, 'Open a track in Tracks and tap Profile.')];
+  const out = [h('h3', {}, `${p.title} · ${fmtDist(p.len)}`)];
+  if (p.profile === null) out.push(h('p', { class: 'note' }, 'Reading the elevation…'));
+  else if (p.profile === false) out.push(h('p', { class: 'note' }, 'No elevation here: download "Elevation" in Offline maps, or go online.'));
+  else out.push(...profileSection(app.map, p.profile));
   return out;
 }
 
@@ -1405,6 +1444,7 @@ export function initUI(appState) {
   app = appState;
   app.dlForm = { sources: ['ms-earth', 'dem'], areaType: 'bbox', trackId: null, buffer: 300, zmin: 10, zmax: 16 };
   if (app.debug) app.debug.ensureGraph = ensureGraph;          // for the e2e tests
+  initBuilder({ app, ensureGraph, toast, openPanel, closePanel, rerender, current: () => current, refreshTracks: () => app.refreshTracks() });
   const kept = settings.plan;
   app.plan = { startMode: kept.startMode ?? 'gps', start: kept.start ?? null, kmMin: kept.kmMin ?? 30, kmMax: kept.kmMax ?? 40,
     shape: 'loop', climbs: 1, minClimbGrade: 15, avoidRed: true, preferDirt: true, allowNoAccess: false, results: [], sel: 0,

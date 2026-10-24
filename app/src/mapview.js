@@ -122,6 +122,20 @@ function buildStyle() {
     { id: 'plan-start', type: 'circle', source: 'plan', filter: ['==', ['geometry-type'], 'Point'],
       paint: { 'circle-radius': 9, 'circle-color': '#ffffff', 'circle-stroke-color': '#000000', 'circle-stroke-width': 4 } },
   );
+  // Make my own route (app/src/builder.js): the legs (kind 'way'), white dashes over gaps, red dashes where no track
+  // is known (straight across), and the dot that follows the elevation chart
+  sources.build = { type: 'geojson', data: EMPTY_FC };
+  layers.push(
+    { id: 'build-casing', type: 'line', source: 'build', filter: ['==', ['get', 'kind'], 'way'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#000000', 'line-opacity': 0.55, 'line-width': 11 } },
+    { id: 'build-line', type: 'line', source: 'build', filter: ['==', ['get', 'kind'], 'way'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#ff6d00', 'line-width': 6 } },
+    { id: 'build-off', type: 'line', source: 'build', filter: ['==', ['get', 'kind'], 'off'],
+      paint: { 'line-color': '#ff1744', 'line-width': 5, 'line-dasharray': [1.4, 1] } },
+    { id: 'build-gap', type: 'line', source: 'build', filter: ['==', ['get', 'kind'], 'gap'],
+      paint: { 'line-color': '#ffffff', 'line-width': 3, 'line-dasharray': [1, 1.2] } },
+  );
+  sources.cursor = { type: 'geojson', data: EMPTY_FC };
   sources.rec = { type: 'geojson', data: EMPTY_FC };
   layers.push({
     id: 'rec', type: 'line', source: 'rec', layout: { 'line-cap': 'round', 'line-join': 'round' },
@@ -132,6 +146,8 @@ function buildStyle() {
   layers.push(
     { id: 'me-acc', type: 'fill', source: 'me', paint: { 'fill-color': '#2196f3', 'fill-opacity': 0.15 } },
     { id: 'me-acc-line', type: 'line', source: 'me', paint: { 'line-color': '#2196f3', 'line-width': 1.5, 'line-opacity': 0.6 } },
+    { id: 'cursor', type: 'circle', source: 'cursor',
+      paint: { 'circle-radius': 8, 'circle-color': '#ffffff', 'circle-stroke-color': '#111511', 'circle-stroke-width': 3.5 } },
   );
   return { version: 8, glyphs: `${APP_BASE}fonts/{fontstack}/{range}.pbf`, sources, layers };
 }
@@ -246,6 +262,15 @@ export function setInvestigation(map, fc) {
 
 export function setPlan(map, fc) {
   map.getSource('plan')?.setData(fc);
+}
+
+export function setBuild(map, fc) {
+  map.getSource('build')?.setData(fc ?? EMPTY_FC);
+}
+
+// The dot that follows a finger on an elevation chart ([lon, lat], or null to hide it).
+export function setCursor(map, p) {
+  map.getSource('cursor')?.setData(p ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: p } }] } : EMPTY_FC);
 }
 
 export function setSelected(map, id) {

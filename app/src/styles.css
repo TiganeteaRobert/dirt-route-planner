@@ -288,6 +288,46 @@ a.btn { display: inline-block; text-decoration: none; margin: 10px 0; }
 #drawbar .btn { flex: 1; }
 @media (min-width: 760px) { #drawbar { width: 420px; right: auto; } }
 
+/* ---- make my own route ---- */
+#buildbar {
+  position: absolute;
+  left: 10px;
+  right: 66px;
+  top: calc(60px + env(safe-area-inset-top));
+  background: #fff;
+  border-radius: 14px;
+  padding: 8px 10px 2px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  z-index: 12;
+  font-weight: 700;
+  font-size: 15.5px;
+}
+#buildbar .row-btns { margin: 6px 0 6px; gap: 6px; flex-wrap: nowrap; }
+#buildbar .btn { flex: 1; min-width: 0; padding: 6px 4px; font-size: 14.5px; min-height: 46px; }
+#buildbar .btn:disabled { opacity: 0.4; }
+#buildbar #build-exit { flex: 0 0 46px; }
+@media (min-width: 760px) { #buildbar { width: 460px; right: auto; } }
+.rb-pt {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #ff6d00;
+  border: 3px solid #fff;
+  box-sizing: border-box;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font: 800 15px/26px system-ui, sans-serif;
+  text-align: center;
+  cursor: grab;
+  touch-action: none;
+}
+.rb-pt.start { background: #00a152; }
+.rb-pt.drag { transform: scale(1.25); }
+.rb-menu { z-index: 13; }                      /* above the bar */
+.rb-menu .maplibregl-popup-content { padding: 6px; border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); }
+.rb-menu .btn { display: block; width: 100%; margin: 4px 0; min-height: 46px; }
+.rb-menu .rb-menu-title { font: 800 14px system-ui, sans-serif; color: var(--muted); padding: 2px 4px; }
+
 /* ---- position marker ---- */
 .me { width: 24px; height: 24px; }
 .me-dot {

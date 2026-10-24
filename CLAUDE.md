@@ -51,6 +51,13 @@ tune the filters in pipeline/ai_vectorize.py from what they report (terraces, fi
 lines). Plan (2026-10-24): a length range with two knobs (kept with the start in settings.plan), the start on the
 mapped way nearest the tap (not an AI track, not an island), waypoints only where a ride can pass through (no
 dead-end branches), loops that ride over a third of themselves twice ranked last; waits for the owner's ride feedback.
+Make my own route (Plan > "Make my own route"; core/builder.js + app/src/builder.js, 2026-10-24): taps hold on to the
+nearest way anywhere along an edge, legs follow the network (a trace cost that forbids nothing), parts of the network
+with no link between them are crossed straight (red dashes, counted as "no track known"; via the main network when
+that is shorter); drag a point, tap the line to insert one, point 1's menu closes the loop, undo; saved routes keep
+their points (track.plan.built) so Tracks > Edit reopens them. Elevation charts (core/profile.js, app/src/chart.js,
+app/src/profileview.js) in the builder, Tracks > Profile, Plan's route cards and Investigate; red at or above
+settings.steepRed (default 45 %, the owner's number; FABDEM grades rarely reach it). tests/e2e/build.e2e.mjs.
 When the owner asks to "investigate" a GPX: `node tools/investigate.mjs <gpx>`, then
 `uv run --with pillow python tools/imagery_crops.py private/reports/<name>`, look at the flag-*.jpg images, and report
 the verdict, risks with km markers and ways around. The imagery stays local (terms).

@@ -26,6 +26,7 @@ const DEFAULTS = {
   colorBy: 'risk',            // how the DirtScout tracks are coloured (see dsstyle.js COLOR_MODES)
   aiMin: 0.4,                 // AI-found tracks: show and route on those scoring at least this (0.3-0.95)
   plan: { kmMin: 30, kmMax: 40, useAi: true, startMode: 'gps', start: null },   // Plan: length range, AI tracks, start
+  steepRed: 45,               // elevation charts: grades at or above this (%) are red
   units: 'metric',
   bingHost: 'tiles',          // 'tiles' = tiles.virtualearth.net, 'ecn' = ecn.t0-3.tiles.virtualearth.net
   saveBrowse: false,          // also store tiles seen while browsing online

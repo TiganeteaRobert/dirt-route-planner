@@ -82,10 +82,14 @@ export async function saveDrawn(name, coords, stats) {
 }
 
 // Saves a generated route as a track (kind 'planned').
-export async function savePlanned(name, coords, stats, opts, color) {
+// A planned route as a track. replaceId: the track it replaces (an edited route keeps its id, colour and switches).
+export async function savePlanned(name, coords, stats, opts, color, replaceId = null) {
   const fc = { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { name, kind: 'trk' }, geometry: { type: 'LineString', coordinates: coords } }] };
+  const old = replaceId ? await db.get('tracks', replaceId) : null;
   const track = {
-    id: `plan-${Date.now().toString(36)}`, name, kind: 'planned', color: color ?? '#00e5ff', visible: true, created: Date.now(),
+    ...(old ?? {}),
+    id: old?.id ?? `plan-${Date.now().toString(36)}`, name, kind: 'planned', color: old?.color ?? color ?? '#00e5ff',
+    visible: old?.visible ?? true, created: old?.created ?? Date.now(),
     fc, stats: { ...statsOf(fc), up: stats.up, dn: stats.dn, climbs: stats.climbs.length, green: stats.green, yellow: stats.yellow, red: stats.red }, plan: opts,
   };
   await db.put('tracks', track);

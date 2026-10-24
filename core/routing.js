@@ -100,7 +100,7 @@ export function makeCost(G, opts = {}, used = null) {
 }
 
 // ---- A* shortest path ----
-class Heap {
+export class Heap {
   constructor() { this.k = []; this.v = []; }
   get size() { return this.k.length; }
   push(key, val) {
