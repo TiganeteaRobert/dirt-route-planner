@@ -1,7 +1,7 @@
 // Panels (one bottom sheet at a time), the toolbar, status pills and toasts.
 import { SOURCES, LOCAL_OVERLAYS, SLOPE_CLASSES, OFFLINE_SOURCES, APP_NAME, DS_BASE, DS_OVERLAY_LIST } from './config.js';
 import { settings, saveSettings, defaultArea } from './settings.js';
-import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw, setAiTiles, setCursor } from './mapview.js';
+import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw, setAiTiles, setCursor, setSteep } from './mapview.js';
 import { initBuilder, startBuilder, builderClick, renderRoute, builderActive, leave as leaveBuilder, panelShown } from './builder.js';
 import { profileSection, fitInView } from './profileview.js';
 import { elevationProfile } from '../../core/profile.js';
@@ -64,6 +64,7 @@ export function openPanel(name) {
 export function closePanel() {
   if (current === 'info') { setSelected(app.map, null); app.selected = null; }
   setCursor(app.map, null);
+  setSteep(app.map, null);
   panelShown(null);
   current = null;
   $('sheet').hidden = true;
@@ -778,7 +779,7 @@ function renderPlan() {
     h('div', { class: 'note' }, `green ${pct(s.green)} · yellow ${pct(s.yellow)} · red ${pct(s.red)}`),
     h('div', { class: 'row-btns' },
       btn('Show', () => { p.sel = i; drawPlan(); fitCoords(r.coords); closePanel(); }),
-      btn('Profile', () => { p.sel = i; drawPlan(); openProfile(`Route ${i + 1}`, r.coords); }),
+      btn('Profile', () => editRoute(`Route ${i + 1}`, r.coords)),
       btn('Save', async () => {
         const d = new Date();
         const name = `Plan ${fmtDist(s.len)} ${d.toLocaleDateString()} #${i + 1}`;
@@ -1208,8 +1209,9 @@ async function renderTracks() {
       ].filter(Boolean).join(' · ')),
       h('div', { class: 'row-btns' },
         t.stats.bbox ? btn('Show', () => { fitTrack(t); closePanel(); }) : null,
-        t.plan?.built ? btn('Edit', () => { if (app.draw) endDraw(); startBuilder(t); }, 'primary') : null,
-        lines ? btn('Profile', () => openProfile(t.name, trackLines(t).flat())) : null,
+        t.plan?.built ? btn('Edit', () => { if (app.draw) endDraw(); startBuilder({ track: t }); }, 'primary') : null,
+        lines ? btn('Profile', () => (t.kind === 'planned' ? editRoute(t.name, trackLines(t).flat(), t)
+          : openProfile(t.name, trackLines(t).flat()))) : null,
         lines ? btn('Investigate', () => runInvestigation(t), t.plan?.built ? '' : 'primary') : null,
         lines ? btn('Save detail offline', () => { presetCorridor(t.id); openPanel('downloads'); }) : null,
         btn('GPX', async () => { const r = await shareGPX(t); if (r === 'downloaded') toast('GPX saved to Downloads'); }),
@@ -1231,6 +1233,14 @@ async function renderTracks() {
 
 // ---------------------------------------------------------------- Elevation profile of a track or a route
 
+// A route's profile in edit mode: the route opens in "Make my own route" (its points, or points along its line)
+// with the profile under the map. The generated routes leave the map meanwhile (back when the builder closes).
+function editRoute(title, coords, track = null) {
+  if (app.draw) endDraw();
+  setPlan(app.map, { type: 'FeatureCollection', features: [] });
+  startBuilder(track ? { track, line: track.plan?.built ? null : coords, profile: true } : { line: coords, title, profile: true });
+}
+
 async function openProfile(title, coords) {
   const p = { title, coords, profile: null, len: lineLength(coords) };
   app.prof = p;
@@ -1247,6 +1257,9 @@ function renderProfile() {
   if (p.profile === null) out.push(h('p', { class: 'note' }, 'Reading the elevation…'));
   else if (p.profile === false) out.push(h('p', { class: 'note' }, 'No elevation here: download "Elevation" in Offline maps, or go online.'));
   else out.push(...profileSection(app.map, p.profile));
+  out.push(h('div', { class: 'row-btns' }, btn('Edit as my own route', () => editRoute(p.title, p.coords))),
+    h('p', { class: 'note' }, 'Makes an editable copy that follows the mapped ways along this line (where it leaves them, the copy goes '
+      + 'around); the original stays as it is.'));
   return out;
 }
 
@@ -1450,7 +1463,8 @@ export function initUI(appState) {
   app = appState;
   app.dlForm = { sources: ['ms-earth', 'dem'], areaType: 'bbox', trackId: null, buffer: 300, zmin: 10, zmax: 16 };
   if (app.debug) app.debug.ensureGraph = ensureGraph;          // for the e2e tests
-  initBuilder({ app, ensureGraph, toast, openPanel, closePanel, rerender, current: () => current, refreshTracks: () => app.refreshTracks() });
+  initBuilder({ app, ensureGraph, toast, openPanel, closePanel, rerender, current: () => current, refreshTracks: () => app.refreshTracks(),
+    onClose: () => drawPlan() });
   const kept = settings.plan;
   app.plan = { startMode: kept.startMode ?? 'gps', start: kept.start ?? null, kmMin: kept.kmMin ?? 30, kmMax: kept.kmMax ?? 40,
     shape: 'loop', climbs: 1, minClimbGrade: 15, avoidRed: true, preferDirt: true, allowNoAccess: false, results: [], sel: 0,

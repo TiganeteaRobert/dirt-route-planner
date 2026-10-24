@@ -5,7 +5,7 @@
 // chart go there). The grade threshold is the owner's setting (settings.steepRed).
 import { elevationChart } from './chart.js';
 import { steepSections, gradeColor } from '../../core/profile.js';
-import { setCursor } from './mapview.js';
+import { setCursor, setSteep } from './mapview.js';
 import { settings, saveSettings } from './settings.js';
 import { h, fmtDist, fmtElev } from './format.js';
 
@@ -52,13 +52,16 @@ export function fitInView(map, coords) {
   map.fitBounds([[w, s], [e, n]], { padding, maxZoom: 16, duration: 500 });
 }
 
-export function profileSection(map, profile) {
+// view: [from, to] metres to show first (the zoom of the chart this one replaces), else the whole route.
+export function profileSection(map, profile, { view = null } = {}) {
   setCursor(map, null);                         // a new chart: no finger on it yet
   let redAt = settings.steepRed ?? 45;
   let steep = steepSections(profile, redAt);
   const list = h('div', { class: 'steep-list' });
   let chart = null;
   const pts = profile.pts ?? [];
+  const drawSteep = () => setSteep(map, steep.map((s) => pts.slice(s.i0, s.i1 + 1).map(ll)).filter((c) => c.length > 1));
+  drawSteep();
   // the map at sample i: the dot, its label, and the steep stretch it is on (if any)
   const mark = (i, follow = true) => {
     const p = pts[i];
@@ -91,8 +94,9 @@ export function profileSection(map, profile) {
   chart = elevationChart(profile, {
     redAt,
     onPoint: (i) => mark(i),
-    onRedAt: (v) => { redAt = v; settings.steepRed = v; saveSettings(); steep = steepSections(profile, v); fillList(); },
+    onRedAt: (v) => { redAt = v; settings.steepRed = v; saveSettings(); steep = steepSections(profile, v); fillList(); drawSteep(); },
   });
+  if (view && view[1] > view[0] && view[0] < profile.length) chart.view([Math.max(0, view[0]), Math.min(profile.length, view[1])]);
   fillList();
   return [
     h('div', { class: 'note' }, `Up ${fmtElev(profile.up)} · down ${fmtElev(profile.down)} · ${fmtElev(profile.min)} to ${fmtElev(profile.max)}`

@@ -57,7 +57,12 @@ with no link between them are crossed straight (red dashes, counted as "no track
 that is shorter); drag a point, tap the line to insert one, point 1's menu closes the loop, undo; saved routes keep
 their points (track.plan.built) so Tracks > Edit reopens them. Elevation charts (core/profile.js, app/src/chart.js,
 app/src/profileview.js) in the builder, Tracks > Profile, Plan's route cards and Investigate; red at or above
-settings.steepRed (default 45 %, the owner's number; FABDEM grades rarely reach it). tests/e2e/build.e2e.mjs.
+settings.steepRed (default 45 %, the owner's number; mountain tracks do read 45-61 %). tests/e2e/build.e2e.mjs.
+A route's Profile (the builder's, Tracks, Plan's route cards) opens it to edit with the chart under the map: the dots
+stay draggable, the chart dims and comes back with the same zoom, the steep stretches are red on the map. Routes
+without dots get them from core/builder.js pointsForLine (every 4 km, plus one where the builder's way leaves the
+line: generated 35 km loops come back the same within 0.1 % with 10-22 dots). Rides and imports keep a read-only
+profile with "Edit as my own route".
 When the owner asks to "investigate" a GPX: `node tools/investigate.mjs <gpx>`, then
 `uv run --with pillow python tools/imagery_crops.py private/reports/<name>`, look at the flag-*.jpg images, and report
 the verdict, risks with km markers and ways around. The imagery stays local (terms).

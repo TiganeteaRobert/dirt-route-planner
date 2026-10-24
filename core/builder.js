@@ -7,6 +7,7 @@
 // X is the segment index of core/investigate.js buildIndex (decoded edge lines and their cumulative lengths).
 // No DOM: the phone and the tests use the same code.
 import { haversine, Heap } from './routing.js';
+import { densify } from './geo.js';
 
 const RAD = Math.PI / 180;
 const CELL = 0.002;                 // the cell size of buildIndex (core/investigate.js)
@@ -325,3 +326,86 @@ export function sumStats(list) {
   }
   return s;
 }
+
+// How far (m) each point of `pts` is from the polyline `ref` (both [[lon, lat], ...]).
+function distances(pts, ref) {
+  const kx = 111320 * Math.cos(ref[0][1] * RAD), ky = 110540;
+  const r = densify(ref, 15);
+  return pts.map((p) => {
+    let best = Infinity;
+    for (const q of r) {
+      const d = ((p[0] - q[0]) * kx) ** 2 + ((p[1] - q[1]) * ky) ** 2;
+      if (d < best) best = d;
+    }
+    return Math.sqrt(best);
+  });
+}
+
+// Largest distance (m) from the samples of `line` to the polyline `ref`.
+const strays = (line, ref) => Math.max(0, ...distances(densify(line, 25), ref));
+
+/**
+ * Builder points that ride along a given line again (a generated route, a saved one, a track): a point every `every`
+ * metres held on to the network within `snap` m, and more where the builder's own way between two points differs from
+ * the line - strays more than `tol` m from it, misses a part of it by as much (a dead-end spur the line rides up and
+ * back), or is 1 % longer or shorter - split where the line is farthest from that way (else in the middle), again and
+ * again, at most `max` extra points.
+ * legOf(A, B) -> {pieces, coords} (the caller's memoized leg). Returns {pts, closed} (a loop's end point left out)
+ * or null when the line's ends are nowhere near the network.
+ */
+export function pointsForLine(G, X, coords, legOf, { every = 4000, snap = 40, tol = 25, max = 120 } = {}) {
+  const line = densify(coords.map((c) => [c[0], c[1]]), 20);
+  const n = line.length;
+  if (n < 2) return null;
+  const dist = new Float64Array(n);
+  for (let i = 1; i < n; i++) dist[i] = dist[i - 1] + haversine(line[i - 1][0], line[i - 1][1], line[i][0], line[i][1]);
+  const total = dist[n - 1];
+  const at = (d) => {                                      // first sample at or past d metres
+    let lo = 0, hi = n - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (dist[m] < d) lo = m + 1; else hi = m; }
+    return lo;
+  };
+  const snapped = new Map();
+  const point = (k) => {
+    if (!snapped.has(k)) snapped.set(k, snapToNetwork(G, X, line[k][0], line[k][1], k === 0 || k === n - 1 ? 150 : snap));
+    return snapped.get(k);
+  };
+  if (!point(0) || !point(n - 1)) return null;
+  // a sample near k (between lo and hi) that holds on to the network
+  const near = (k, lo, hi) => {
+    for (let off = 0; off < 15; off++) {
+      for (const c of [k - off, k + off]) if (c > lo && c < hi && point(c)) return c;
+    }
+    return -1;
+  };
+  let budget = max;
+  const between = (i, j, depth) => {
+    if (budget <= 0 || j - i < 3 || depth > 12) return [];
+    const L = legOf(point(i), point(j)), part = line.slice(i, j + 1);
+    let len = 0;
+    for (let k = 1; k < L.coords.length; k++) len += haversine(L.coords[k - 1][0], L.coords[k - 1][1], L.coords[k][0], L.coords[k][1]);
+    const want = dist[j] - dist[i];
+    // how far each sample of the line is from that way (no way at all: both points on the same spot, the line goes
+    // somewhere and comes back - measured from that spot)
+    const off = L.coords.length > 1 ? distances(part, L.coords) : part.map((p) => haversine(p[0], p[1], part[0][0], part[0][1]));
+    const far = off.indexOf(Math.max(...off));
+    if (Math.abs(len - want) <= Math.max(20, 0.01 * want) && off[far] <= tol && (L.coords.length < 2 || strays(L.coords, part) <= tol)) return [];
+    // the next point where the way leaves the line most (the tip of a spur it skips), else halfway
+    const m = near(off[far] > tol && far > 0 && far < part.length - 1 ? i + far : at((dist[i] + dist[j]) / 2), i, j);
+    if (m < 0) return [];
+    budget--;
+    return [...between(i, m, depth + 1), m, ...between(m, j, depth + 1)];
+  };
+  const marks = [0];
+  for (let d = every; d < total - every / 2; d += every) {
+    const k = near(at(d), marks.at(-1), n - 1);
+    if (k > 0) marks.push(k);
+  }
+  marks.push(n - 1);
+  const keep = [0];
+  for (let k = 1; k < marks.length; k++) keep.push(...between(marks[k - 1], marks[k], 0), marks[k]);
+  const closed = total > 200 && haversine(line[0][0], line[0][1], line[n - 1][0], line[n - 1][1]) < 30;
+  if (closed) keep.pop();                                   // a loop ends where it started: point 1 closes it
+  return { pts: keep.map(point), closed };
+}
+

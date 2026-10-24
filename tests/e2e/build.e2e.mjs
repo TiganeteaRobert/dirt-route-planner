@@ -186,6 +186,41 @@ try {
   check(v1[1] - v1[0] < v0[1] - v0[0], `"+" zooms the chart in (${Math.round(v0[1] - v0[0])} -> ${Math.round(v1[1] - v1[0])} m)`);
   await shot('profile');
 
+  // still editable with the profile open: drag point 3 to another junction above the sheet
+  const sheetTop = (await page.locator('#sheet').boundingBox()).y;
+  const free = await page.evaluate(async (top) => {
+    const G = await window.dirtscout.debug.ensureGraph();
+    const map = window.dirtscout.map, out = [];
+    for (let n = 0; n < G.N; n++) {
+      if (G.off[n + 1] - G.off[n] < 2) continue;
+      const q = map.project([G.lon[n], G.lat[n]]);
+      if (q.x > 30 && q.x < 330 && q.y > 90 && q.y < top - 40) out.push({ ll: [G.lon[n], G.lat[n]] });
+    }
+    return out;
+  }, sheetTop);
+  check(free.length > 0, `junctions on the map above the profile to drag a dot to (${free.length})`);
+  const s0 = await state();
+  const target = free.map((c) => ({ c, d: Math.min(...s0.pts.map((p) => hv(p, c.ll))) })).sort((x, y) => y.d - x.d)[0];
+  const lenBefore = await page.evaluate(() => window.dirtscout.build.legs.reduce((m, l) => m + l.stats.len, 0));
+  const m3 = await page.locator('.rb-pt').nth(2).boundingBox();
+  const [ux, uy] = await screen(target.c.ll);
+  await page.mouse.move(m3.x + m3.width / 2, m3.y + m3.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + ux, box.y + uy, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+  const stale = await page.evaluate(() => !!document.querySelector('#sheet-body .elev-chart.ec-stale'));
+  await page.waitForFunction(() => !!window.dirtscout.build.profile && !document.querySelector('#sheet-body .elev-chart.ec-stale'), null, { timeout: 30000 });
+  const lenAfter = await page.evaluate(() => window.dirtscout.build.legs.reduce((m, l) => m + l.stats.len, 0));
+  check(stale, 'while the elevation is read again the chart dims');
+  check(Math.abs(lenAfter - lenBefore) > 20 && joined(await state()), `a dot dragged under the open profile changed the route (${Math.round(lenBefore)} -> ${Math.round(lenAfter)} m)`);
+  const v2 = await page.locator('.elev-chart').evaluate((el) => el.view());
+  check(Math.abs((v2[1] - v2[0]) - (v1[1] - v1[0])) < 1, 'the new chart keeps the zoom');
+  await page.locator('.sheet-body button', { hasText: 'Undo' }).click();
+  await page.waitForFunction(() => !!window.dirtscout.build.profile && !document.querySelector('#sheet-body .elev-chart.ec-stale'), null, { timeout: 30000 });
+  const lenUndo = await page.evaluate(() => window.dirtscout.build.legs.reduce((m, l) => m + l.stats.len, 0));
+  check(Math.abs(lenUndo - lenBefore) < 1, 'Undo in the profile puts the dot back');
+
   // save, then edit it again from Tracks
   page.once('dialog', (d) => d.accept('E2E route'));
   await page.locator('.sheet-body button', { hasText: 'Save' }).first().click();
@@ -202,12 +237,42 @@ try {
   await settle(300);
   check(!(await page.evaluate(() => !!window.dirtscout.build)), 'leaving without changes asks nothing');
 
-  // a track's elevation profile from Tracks
+  // Tracks > Profile on a saved route: the route opens to edit, with the profile under it
   await page.locator('#toolbar [data-sheet="tracks"]').click();
   await page.locator('.card.track', { hasText: 'E2E route' }).getByRole('button', { name: 'Profile' }).click();
   await page.locator('.sheet-body .elev-chart canvas').waitFor({ timeout: 60000 });
-  check(true, 'Tracks > Profile shows the elevation chart');
+  check(await page.evaluate(() => window.dirtscout.build?.pts.length === 4 && document.getElementById('sheet-title').textContent === 'Your route'),
+    'Tracks > Profile opens the saved route to edit, with its elevation chart');
   await shot('track-profile');
+  await page.locator('#sheet-close').click();
+  await page.locator('#build-exit').click();
+  await settle(300);
+
+  // Plan > a generated route's Profile: points along it, the same route, ready to edit
+  await page.locator('#toolbar [data-sheet="plan"]').click();
+  await page.locator('.range2 input[type=range]').nth(0).evaluate((el) => { el.value = '6'; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await page.locator('.range2 input[type=range]').nth(1).evaluate((el) => { el.value = '10'; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await page.getByRole('button', { name: 'Map centre' }).click();
+  await page.locator('.sheet-body button', { hasText: /Generate/ }).click();
+  await page.waitForFunction(() => !window.dirtscout.plan.busy && window.dirtscout.plan.results.length > 0, null, { timeout: 120000 });
+  const genLen = await page.evaluate(() => window.dirtscout.plan.results[0].stats.len);
+  await page.locator('.plan-card').first().getByRole('button', { name: 'Profile' }).click();
+  await page.waitForFunction(() => window.dirtscout.build?.legs.length > 0 && !!window.dirtscout.build.profile, null, { timeout: 120000 });
+  const ed = await page.evaluate(() => {
+    const b = window.dirtscout.build;
+    return { pts: b.pts.length, closed: b.closed, len: b.legs.reduce((m, l) => m + l.stats.len, 0), title: document.getElementById('sheet-title').textContent };
+  });
+  check(ed.title === 'Your route' && ed.pts >= 3 && ed.closed, `a generated loop opens to edit: ${ed.pts} dots, a loop`);
+  check(Math.abs(ed.len - genLen) / genLen < 0.02, `the same route: ${Math.round(ed.len)} m as generated ${Math.round(genLen)} m`);
+  check(await page.evaluate(() => window.dirtscout.map.queryRenderedFeatures({ layers: ['plan-line'] }).length === 0), 'the generated routes leave the map meanwhile');
+  await settle(800);
+  await shot('plan-route-edit');
+  await page.locator('#sheet-close').click();
+  page.once('dialog', (d) => d.accept());
+  await page.locator('#build-exit').click();
+  await settle(500);
+  check(await page.evaluate(() => !window.dirtscout.build && window.dirtscout.map.queryRenderedFeatures({ layers: ['plan-line'] }).length > 0),
+    'leaving the builder puts them back');
 
   const bad = errors.filter((e) => !/Failed to load resource|net::/.test(e));
   check(bad.length === 0, `no page errors${bad.length ? `: ${bad.join(' | ')}` : ''}`);

@@ -135,6 +135,14 @@ function buildStyle() {
     { id: 'build-gap', type: 'line', source: 'build', filter: ['==', ['get', 'kind'], 'gap'],
       paint: { 'line-color': '#ffffff', 'line-width': 3, 'line-dasharray': [1, 1.2] } },
   );
+  // while an elevation chart is open: every stretch at or above the red grade, drawn red over the route
+  sources.steep = { type: 'geojson', data: EMPTY_FC };
+  layers.push(
+    { id: 'steep-casing', type: 'line', source: 'steep', layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#000000', 'line-width': 10, 'line-opacity': 0.6 } },
+    { id: 'steep-line', type: 'line', source: 'steep', layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#e53935', 'line-width': 6 } },
+  );
   sources.cursor = { type: 'geojson', data: EMPTY_FC };
   sources.rec = { type: 'geojson', data: EMPTY_FC };
   layers.push({
@@ -269,6 +277,13 @@ export function setPlan(map, fc) {
 
 export function setBuild(map, fc) {
   map.getSource('build')?.setData(fc ?? EMPTY_FC);
+}
+
+// The steep stretches of the route whose chart is open ([[[lon, lat], ...], ...]; null clears them).
+export function setSteep(map, lines) {
+  map.getSource('steep')?.setData(lines?.length
+    ? { type: 'FeatureCollection', features: lines.map((c) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: c } })) }
+    : EMPTY_FC);
 }
 
 // The dot that follows a finger on an elevation chart: p [lon, lat] (null hides it), in the grade's colour, with a

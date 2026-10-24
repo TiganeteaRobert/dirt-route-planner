@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { haversine } from '../core/routing.js';
 import { buildIndex } from '../core/investigate.js';
-import { traceCost, snapToNetwork, snapToPieces, pathBetween, leg, piecesCoords, piecesStats, sumStats } from '../core/builder.js';
+import { traceCost, snapToNetwork, snapToPieces, pathBetween, leg, piecesCoords, piecesStats, sumStats, pointsForLine } from '../core/builder.js';
 import { network, LON0, LAT0, DLON, DLAT } from './fixtures/grid.mjs';
 
 const ll = (x, y) => [LON0 + x * DLON, LAT0 + y * DLAT];
@@ -120,3 +120,38 @@ test('AI tracks and gaps count in the stats, legs add up', () => {
   assert.ok(Math.abs(both.len - 2 * st.len) < 1e-6);
   assert.ok(Math.abs(both.risk[0] + both.risk[1] + both.risk[2] - 2 * st.len) < 1e-6);
 });
+
+test('points along a given line: the builder rides the same line again, a loop comes back closed', () => {
+  const s = setup();
+  const cost = traceCost(s.G);
+  const legOf = (A, B) => { const pieces = leg(s.G, A, B, cost); return { pieces, coords: piecesCoords(s.X, pieces) }; };
+  // a loop that does not take the shortest ways: east along y = 1, north on x = 7, west on y = 6, back south on x = 1
+  const loop = [[1, 1], [7, 1], [7, 6], [1, 6], [1, 1]].map(([x, y]) => ll(x, y));
+  const r = pointsForLine(s.G, s.X, loop, legOf);
+  assert.ok(r && r.closed, 'a loop');
+  assert.ok(r.pts.length >= 4 && r.pts.length < 40, `${r.pts.length} points`);
+  const legs = r.pts.map((A, i) => legOf(A, r.pts[(i + 1) % r.pts.length]));
+  const total = legs.reduce((m, l) => m + piecesStats(s.G, l.pieces).len, 0);
+  assert.ok(Math.abs(total - 22 * 500) < 30, `the same length again: ${Math.round(total)} m`);
+  // every leg stays on the given line
+  const ref = [];
+  for (let k = 0; k < loop.length - 1; k++) {
+    for (let t = 0; t <= 50; t++) ref.push([loop[k][0] + ((loop[k + 1][0] - loop[k][0]) * t) / 50, loop[k][1] + ((loop[k + 1][1] - loop[k][1]) * t) / 50]);
+  }
+  for (const l of legs) {
+    for (const p of l.coords) {
+      const d = Math.min(...ref.map((q) => haversine(p[0], p[1], q[0], q[1])));
+      assert.ok(d < 40, `a leg leaves the line by ${Math.round(d)} m`);
+    }
+  }
+  // a line that rides up the dead-end branch east of the grid and back: the branch is not skipped
+  const spur = [[5, 2], [8, 2], [8, 4], [11, 4], [8, 4], [8, 6], [5, 6]].map(([x, y]) => ll(x, y));
+  const r2 = pointsForLine(s.G, s.X, spur, legOf);
+  const legs2 = r2.pts.slice(0, -1).map((A, i) => legOf(A, r2.pts[i + 1]));
+  const total2 = legs2.reduce((m, l) => m + piecesStats(s.G, l.pieces).len, 0);
+  assert.ok(Math.abs(total2 - 16 * 500) < 30, `up the branch and back: ${Math.round(total2)} m of ${16 * 500}`);
+  // an open line is not closed; a line far from every way gives nothing
+  assert.equal(pointsForLine(s.G, s.X, [ll(1, 1), ll(5, 1)], legOf).closed, false);
+  assert.equal(pointsForLine(s.G, s.X, [ll(20, 20), ll(25, 20)], legOf), null);
+});
+

@@ -2,12 +2,14 @@
 // between two points the route follows the network (core/builder.js). Drag a point to move it (the route follows
 // while it moves), tap the line between two points to add one there, tap a point for its menu (remove it; on point 1:
 // back to the start, closing the loop). The bar shows length and climb; Profile opens the stats and the elevation
-// chart. Routes saved from here keep their points, so Tracks can open them here again.
+// chart, and the route stays editable under it (the steep stretches red on the map, the chart updating in place).
+// Routes saved from here keep their points; a generated or saved route without them gets points along its line.
+// Opening a route's profile from Plan or Tracks starts here, with the profile open.
 import { Marker, Popup } from 'maplibre-gl';
-import { traceCost, snapToNetwork, snapToPieces, leg, pieceCoords, piecesCoords, piecesStats, sumStats } from '../../core/builder.js';
+import { traceCost, snapToNetwork, snapToPieces, leg, pieceCoords, piecesCoords, piecesStats, sumStats, pointsForLine } from '../../core/builder.js';
 import { haversine } from '../../core/routing.js';
 import { elevationProfile, steepSections } from '../../core/profile.js';
-import { setBuild, setCursor } from './mapview.js';
+import { setBuild, setCursor, setSteep } from './mapview.js';
 import { elevationAt } from './tiles.js';
 import { savePlanned, shareGPX } from './tracks.js';
 import { h, fmtDist, fmtElev } from './format.js';
@@ -16,19 +18,14 @@ import { profileSection, fitInView } from './profileview.js';
 const $ = (id) => document.getElementById(id);
 const SNAP_PX = 44;              // a tap holds on to the nearest way within this many screen pixels (25 m at least)
 const COLOR = '#ff6d00';
-let ctx = null;                  // {app, ensureGraph, toast, openPanel, closePanel, rerender, current, refreshTracks}
+let ctx = null;                  // {app, ensureGraph, toast, openPanel, closePanel, rerender, current, refreshTracks, onClose}
 const B = () => ctx?.app.build ?? null;
 
 export function initBuilder(c) {
   ctx = c;
   $('build-undo').addEventListener('click', undo);
   $('build-loop').addEventListener('click', () => toggleLoop());
-  $('build-stats').addEventListener('click', () => {
-    closeMenu();
-    ctx.openPanel('route');
-    const b = B();
-    if (b) requestAnimationFrame(() => fitInView(ctx.app.map, routeLine(b)));     // into the map above the sheet
-  });
+  $('build-stats').addEventListener('click', openRoutePanel);
   $('build-save').addEventListener('click', save);
   $('build-exit').addEventListener('click', () => leave());
 }
@@ -41,18 +38,19 @@ const btn = (label, onclick, cls = '') => h('button', { class: `btn ${cls}`, typ
 const legCount = (b) => (b.pts.length < 2 ? 0 : b.closed ? b.pts.length : b.pts.length - 1);
 const key = (s) => `${s.e}:${s.t.toFixed(6)}`;
 
-function legOf(b, i) {
-  const A = b.pts[i].s, Z = b.pts[(i + 1) % b.pts.length].s;
+function legFor(b, A, Z) {
   const k = `${key(A)}>${key(Z)}`;
   let r = b.cache.get(k);
   if (!r) {
     const pieces = leg(b.G, A, Z, b.cost);
     r = { pieces, coords: piecesCoords(ctx.app.graphIndex, pieces), stats: piecesStats(b.G, pieces) };
-    if (b.cache.size > 400) b.cache.clear();
+    if (b.cache.size > 600) b.cache.clear();
     b.cache.set(k, r);
   }
   return r;
 }
+
+const legOf = (b, i) => legFor(b, b.pts[i].s, b.pts[(i + 1) % b.pts.length].s);
 
 const computeLegs = (b) => { b.legs = Array.from({ length: legCount(b) }, (_, i) => legOf(b, i)); };
 
@@ -101,9 +99,14 @@ export function panelShown(name) {
   if (B()) $('buildbar').hidden = name === 'route' || name === 'profile';
 }
 
-export async function startBuilder(track = null) {
-  if (B() && !track) { ctx.closePanel(); return; }        // already building: back to the map
-  if (B()) { leave(); if (B()) return; }                  // editing a saved route: leave the current one first
+/**
+ * opts: track (a saved route: its own points, else points along `line`, its line), line + title (a route that is not
+ * saved yet, e.g. a generated one), profile (open the profile right away: edit while you look at the elevation).
+ * With no options: a new route, tapped from scratch.
+ */
+export async function startBuilder({ track = null, line = null, title = null, profile = false } = {}) {
+  if (B() && !track && !line) { ctx.closePanel(); return; }   // already building: back to the map
+  if (B()) { leave(); if (B()) return; }                      // another route: leave the current one first
   ctx.closePanel();
   let G;
   try {
@@ -113,23 +116,50 @@ export async function startBuilder(track = null) {
     return;
   }
   const b = { G, cost: traceCost(G), cache: new Map(), pts: [], legs: [], closed: false, undo: [], markers: [], menu: null,
-    track, dirty: false, profile: null, profSeq: 0, before: null };
+    track, title, dirty: false, profile: null, shown: null, profSeq: 0, before: null };
   ctx.app.build = b;
-  for (const [lon, lat] of track?.plan?.built?.pts ?? []) {
-    const s = snapToNetwork(G, ctx.app.graphIndex, lon, lat, 200);
-    if (s) b.pts.push({ s });
-  }
-  b.closed = !!track?.plan?.built?.closed && b.pts.length >= 2;
   $('buildbar').hidden = false;
+  if (track?.plan?.built) {
+    for (const [lon, lat] of track.plan.built.pts) {
+      const s = snapToNetwork(G, ctx.app.graphIndex, lon, lat, 200);
+      if (s) b.pts.push({ s });
+    }
+    b.closed = !!track.plan.built.closed && b.pts.length >= 2;
+  } else if (line) {
+    // points along the line, as many as it takes for the builder to ride the same way
+    bar('Getting the route ready to edit…');
+    await new Promise((r) => setTimeout(r, 30));
+    const r = pointsForLine(G, ctx.app.graphIndex, line, (A, Z) => legFor(b, A, Z));
+    if (B() !== b) return;
+    if (!r) {
+      ctx.toast('This line is not on the route network here, so it cannot be edited.', { ms: 6000 });
+      close();
+      return;
+    }
+    b.pts = r.pts.map((s) => ({ s }));
+    b.closed = r.closed;
+  }
   computeLegs(b);
   draw();
   if (b.pts.length > 1) {
-    fit(routeLine(b));
     scheduleProfile();
+    if (profile) openRoutePanel();
+    else fit(routeLine(b));
   }
-  ctx.toast(track ? `Editing "${track.name}": drag a point, tap the line to add one, tap a point for its menu.`
+  const name = track?.name ?? title;
+  ctx.toast(name ? `Editing "${name}": drag a dot to take another way, tap the line to add one, tap a dot for its menu.`
+    + `${profile ? ' Steep stretches are red on the map.' : ''}`
     : 'Tap where the route starts, then where it goes: each tap holds on to the nearest track and the route follows the tracks between your points.',
   { ms: 7000 });
+}
+
+// The profile under the map: the route fitted into the map above it, every dot still draggable.
+function openRoutePanel() {
+  const b = B();
+  if (!b) return;
+  closeMenu();
+  ctx.openPanel('route');
+  requestAnimationFrame(() => fitInView(ctx.app.map, routeLine(b)));
 }
 
 function close() {
@@ -139,9 +169,11 @@ function close() {
   b.menu?.remove();
   setBuild(ctx.app.map, null);
   setCursor(ctx.app.map, null);
+  setSteep(ctx.app.map, null);
   $('buildbar').hidden = true;
   ctx.app.build = null;
   if (ctx.current() === 'route') ctx.closePanel();
+  ctx.onClose?.();
 }
 
 // Leave the builder (asks first when there are unsaved changes).
@@ -219,16 +251,18 @@ function syncMarkers() {
     el.dataset.i = i;
     el.firstChild.textContent = String(i + 1);
     el.classList.toggle('start', i === 0);
+    el.classList.toggle('small', b.pts.length > 12);                 // many dots (a long route): smaller ones
     el.setAttribute('aria-label', `Route point ${i + 1}`);
   });
 }
 
-function bar() {
+function bar(msg = null) {
   const b = B();
   if (!b) return;
   const n = b.pts.length;
   let text;
-  if (!n) text = 'Tap the map where the route starts';
+  if (msg) text = msg;
+  else if (!n) text = 'Tap the map where the route starts';
   else if (n === 1) text = 'Point 1 set: tap where the route goes next';
   else {
     const st = routeStats(b);
@@ -250,7 +284,13 @@ function changed(b) {
   computeLegs(b);
   draw();
   scheduleProfile();
-  if (ctx.current() === 'route') ctx.rerender();
+  if (ctx.current() === 'route') {
+    // the chart on screen is now out of date: dimmed, and its red stretches off the map, until the new one is in
+    document.querySelector('#sheet-body .elev-chart')?.classList.add('ec-stale');
+    setSteep(ctx.app.map, null);
+    setCursor(ctx.app.map, null);
+    if (b.legs.length === 0) ctx.rerender();
+  }
 }
 
 function pushUndo(b, snap = snapshot(b)) {
@@ -406,7 +446,7 @@ function scheduleProfile() {
     b.profile = prof ?? false;
     bar();
     if (ctx.current() === 'route') ctx.rerender();
-  }, 500);
+  }, 350);
 }
 
 const pct = (x, len) => `${Math.round((len ? x / len : 0) * 100)} %`;
@@ -417,21 +457,30 @@ export function renderRoute() {
   if (!b) return [h('p', { class: 'note' }, 'Open Plan and tap "Make my own route".')];
   if (b.legs.length === 0) return [h('p', { class: 'note' }, 'Tap at least two points on the map.')];
   const st = routeStats(b), L = st.len;
+  // the zoom of the chart this one replaces, unless it showed the whole route
+  const old = document.querySelector('#sheet-body .elev-chart')?.view?.();
+  const view = old && b.shownLen && (old[0] > 1 || old[1] < b.shownLen - 1) ? old : null;
   // first what the finger needs (the chart, with the map above the sheet), then what the route rides
   const out = [
     h('div', { class: 'row-btns' },
       btn('Save', save, 'primary'),
+      h('button', { class: 'btn', type: 'button', onclick: undo, disabled: !b.undo.length }, 'Undo'),
       btn('GPX', async () => {
-        const r = await shareGPX({ name: b.track?.name ?? `DirtScout route ${fmtDist(L)}`, fc: lineFc(routeLine(b), 'route') });
+        const r = await shareGPX({ name: b.track?.name ?? b.title ?? `DirtScout route ${fmtDist(L)}`, fc: lineFc(routeLine(b), 'route') });
         if (r === 'downloaded') ctx.toast('GPX saved to Downloads');
       }),
-      btn('Keep editing', () => ctx.closePanel())),
+      btn('Hide', () => ctx.closePanel())),
     h('div', { class: 'verdict' }, h('strong', {}, fmtDist(L)),
       h('span', {}, ` · ${b.pts.length} points${b.closed ? ' · a loop' : ''}${b.profile ? ` · ↑ ${fmtElev(b.profile.up)} ↓ ${fmtElev(b.profile.down)}` : ''}`)),
   ];
   if (b.profile === null) out.push(h('p', { class: 'note' }, 'Reading the elevation…'));
   else if (b.profile === false) out.push(h('p', { class: 'note' }, 'No elevation here: download "Elevation" in Offline maps, or go online.'));
-  else out.push(...profileSection(ctx.app.map, b.profile));
+  else {
+    b.shownLen = b.profile.length;
+    out.push(...profileSection(ctx.app.map, b.profile, { view }));
+    out.push(h('p', { class: 'note' }, 'Drag a dot on the map to take another way (the red stretches are the steep ones), '
+      + 'or tap the line to add a dot there. The chart follows.'));
+  }
   out.push(
     h('h3', {}, 'What it rides'),
     h('div', { class: 'riskbar' }, h('i', { style: `width:${(st.risk[0] / L) * 100}%;background:#00c853` }),
@@ -456,7 +505,7 @@ export async function save() {
   const coords = routeLine(b);
   const st = routeStats(b);
   const prof = b.profile || (await elevationProfile(coords, elevationAt));
-  const name = prompt('Name of this route', b.track?.name ?? `My route ${fmtDist(st.len)} ${new Date().toLocaleDateString()}`);
+  const name = prompt('Name of this route', b.track?.name ?? `${b.title ?? 'My route'} ${fmtDist(st.len)} ${new Date().toLocaleDateString()}`);
   if (name === null) return;
   const L = st.len || 1;
   const stats = { up: prof?.up ?? 0, dn: prof?.down ?? 0, climbs: prof ? steepSections(prof, 15).filter((c) => c.dir > 0) : [],
