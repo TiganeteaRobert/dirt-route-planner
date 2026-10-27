@@ -572,3 +572,8 @@ body.navigating:not(.nav-editing) #toast { bottom: calc(96px + env(safe-area-ins
 .t3d-head { display: flex; align-items: center; gap: 10px; }
 .t3d .slider { display: flex; flex-direction: column; align-items: stretch; gap: 4px; margin: 8px 0 2px; padding: 0; color: var(--ink); font-weight: 800; }
 .t3d .slider input { width: 100%; }
+
+/* ---- send to phone: the QR code ---- */
+.qr { display: flex; justify-content: center; margin: 12px 0 6px; }
+.qr svg { width: min(300px, 78vw); height: auto; display: block; }
+.link-text { overflow-wrap: anywhere; font-family: ui-monospace, monospace; font-size: 12px; }

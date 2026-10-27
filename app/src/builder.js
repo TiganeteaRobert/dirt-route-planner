@@ -9,7 +9,7 @@
 // is no other way); saved with the route. While riding (app/src/nav.js), Edit opens the route here with a blue dot where
 // the rider is, and Continue rides the new route from that dot.
 import { Marker, Popup } from 'maplibre-gl';
-import { traceCost, snapToNetwork, snapToPieces, leg, pieceCoords, piecesCoords, piecesStats, sumStats, pointsForLine } from '../../core/builder.js';
+import { traceCost, withAvoid, snapToNetwork, snapToPieces, leg, pieceCoords, piecesCoords, piecesStats, sumStats, pointsForLine } from '../../core/builder.js';
 import { haversine } from '../../core/routing.js';
 import { elevationProfile, steepSections } from '../../core/profile.js';
 import { setBuild, setCursor, setSteep } from './mapview.js';
@@ -21,7 +21,7 @@ import { profileSection, fitInView } from './profileview.js';
 const $ = (id) => document.getElementById(id);
 const SNAP_PX = 44;              // a tap holds on to the nearest way within this many screen pixels (25 m at least)
 const COLOR = '#ff6d00';
-let ctx = null;                  // {app, ensureGraph, toast, openPanel, closePanel, rerender, current, refreshTracks, onClose, navigate}
+let ctx = null;                  // {app, ensureGraph, toast, openPanel, closePanel, rerender, current, refreshTracks, onClose, navigate, send}
 const B = () => ctx?.app.build ?? null;
 
 export function initBuilder(c) {
@@ -71,10 +71,8 @@ export const routeStats = (b = B()) => sumStats(b.legs.map((l) => l.stats));
 const snapshot = (b) => ({ G: b.G, closed: b.closed, pts: b.pts.map((p) => ({ s: { ...p.s }, here: p.here })), avoidAt: new Map(b.avoidAt) });
 
 // The way the builder joins two points, with the avoided stretches 50 times dearer (taken only when nothing else goes).
-function makeCost(b) {
-  const base = traceCost(b.G);
-  return (e) => (b.avoidAt.has(e) ? base(e) * 50 + 20000 : base(e));
-}
+// b.avoidAt is read live: marking a stretch only needs the legs' cache cleared.
+const makeCost = (b) => withAvoid(traceCost(b.G), { has: (e) => b.avoidAt.has(e) });
 
 // Avoided stretches are kept as places (edge ids change with the area pack): hold them on to the network again.
 function snapAvoid(b, places) {
@@ -626,11 +624,16 @@ export function renderRoute() {
   }
   out.push(h('div', { class: 'row-btns' },
     btn('Avoid a stretch', () => avoidMode(true)),
+    b.nav ? null : btn('Send to phone', async () => {
+      const res = await summary(b);
+      ctx.send?.({ name: b.track?.name ?? b.title ?? `My route ${fmtDist(res.stats.len)}`, coords: res.coords, built: res.built, len: res.stats.len });
+    }),
     btn('GPX', async () => {
       const r = await shareGPX({ name: b.track?.name ?? b.title ?? `DirtScout route ${fmtDist(L)}`, fc: lineFc(routeLine(b), 'route') });
       if (r === 'downloaded') ctx.toast('GPX saved to Downloads');
     })),
-  h('p', { class: 'note' }, 'Avoid: tap a stretch of track and the route goes around it. Ride it: navigate this route.'));
+  h('p', { class: 'note' }, 'Avoid: tap a stretch of track and the route goes around it. Ride it: navigate this route. '
+    + 'Send to phone: a QR code that puts this route on the phone.'));
   out.push(
     h('h3', {}, 'What it rides'),
     h('div', { class: 'riskbar' }, h('i', { style: `width:${(st.risk[0] / L) * 100}%;background:#00c853` }),

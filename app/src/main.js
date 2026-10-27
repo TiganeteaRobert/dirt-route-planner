@@ -9,6 +9,7 @@ import { loadStored as loadAi } from './aibundle.js';
 import { addBlobTiles } from './pack.js';
 import { initUI, toast, refreshAi } from './ui.js';
 import { resumeNav } from './nav.js';
+import { receive as receiveRoute } from './sendroute.js';
 import { initTerrain3d, set3d } from './terrain3d.js';
 import { listTracks, mapData } from './tracks.js';
 import { downloader } from './downloads.js';
@@ -60,6 +61,7 @@ app.map.on('load', async () => {
   if (settings.keepAwake) wake.want('user', true);
   if (settings.terrain3d?.on) set3d(true, false);
   resumeNav();                     // a route that was being ridden when the app closed
+  receiveRoute();                  // a route sent from another device (Send to phone) opened the app
 });
 
 window.addEventListener('beforeinstallprompt', (e) => {

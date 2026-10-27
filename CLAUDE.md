@@ -83,6 +83,12 @@ on Tracks, Plan's route cards and the builder's route panel ("Ride it").
   {coords, built, stats, hereAlong} and the ride goes on from the dot.
 - The state is kept in localStorage (dirtscout.nav.v1) and resumes after a reload. The exit offers to save a changed
   route and to stop the recording that navigation started.
+Send to phone (2026-10-27; core/routelink.js + app/src/sendroute.js, tests/routelink.test.js + tests/e2e/send.e2e.mjs):
+tracks are per browser (IndexedDB), so a route goes PC -> phone as a QR code of `<app>#route=<base64url JSON>`. The
+JSON holds the builder's points (kind "b", from plan.built or pointsForLine on the PC); the phone rebuilds the route
+with core/builder.js routeFromPoints (same costs and avoided stretches as the builder) and saves it with plan.sent
+(a signature: the same link twice adds nothing). Kind "l" = a line off the network, simplified to fit (lineForLink).
+decodeRoute validates and caps everything (links come from anywhere). Not for TET tracks. QR: npm uqr (pinned).
 The PC's 3D terrain (app/src/terrain3d.js, a "3D" map button only with a mouse): a separate raster-dem source
 "terrain" (same tiles as "dem"), an exaggeration slider (settings.terrain3d), and the hillshade on by itself over the
 topo or no base map.

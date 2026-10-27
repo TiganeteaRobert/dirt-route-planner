@@ -58,6 +58,11 @@ Beliș-Fântânele to the Bihor heights, south to Aiud. An installable web app f
   - **Edit on the spot:** the route opens with a dot where you are. Drag a dot onto another track, or tap Avoid and then
     a stretch, and the route goes around it. Continue rides the new route.
   - **A reload:** the ride carries on.
+- **Send to phone:** tracks stay in the browser that made them (no account, no server). To ride a route planned on the
+  PC, tap **Send to phone** on it (Tracks, Plan or your own route): a QR code appears. Scan it with the phone's camera
+  and DirtScout opens and saves the route in Tracks, with its points, ready to Navigate. The link holds only the
+  route's points (the phone rebuilds it on its own map), and it travels in the part of the address the web server
+  never sees. TET / ACT files are never sent.
 - **3D terrain (PC):** tilt and turn the map over the relief, with a slider that raises it (x1 to x5) so the steep
   ground and the valleys read at a glance. Heights come from the ~30 m model.
 

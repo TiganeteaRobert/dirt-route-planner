@@ -317,6 +317,34 @@ export function piecesStats(G, pieces) {
   return s;
 }
 
+// A cost with some edges avoided: 50 times dearer, so they are ridden only when there is no other way.
+export const withAvoid = (cost, avoided) => (e) => (avoided.has(e) ? cost(e) * 50 + 20000 : cost(e));
+
+/**
+ * A route from its points as saved (built.pts [[lon, lat], ...], held on to the network within 200 m), closed (back
+ * to point 1) and the places of its avoided stretches (within 15 m): {coords, stats, pts (the snapped points),
+ * avoided (edge ids)}, or null when fewer than two points are near the network. The route builder rides the same way.
+ */
+export function routeFromPoints(G, X, pts, closed = false, avoid = []) {
+  const avoided = new Set();
+  for (const [lon, lat] of avoid) {
+    const s = snapToNetwork(G, X, lon, lat, 15);
+    if (s) avoided.add(s.e);
+  }
+  const cost = withAvoid(traceCost(G), avoided);
+  const S = pts.map(([lon, lat]) => snapToNetwork(G, X, lon, lat, 200)).filter(Boolean);
+  if (S.length < 2) return null;
+  const legs = [];
+  for (let i = 0; i < S.length - 1; i++) legs.push(leg(G, S[i], S[i + 1], cost));
+  if (closed) legs.push(leg(G, S[S.length - 1], S[0], cost));
+  const coords = [];
+  for (const l of legs) {
+    const c = piecesCoords(X, l);
+    for (let i = coords.length ? 1 : 0; i < c.length; i++) coords.push(c[i]);
+  }
+  return { coords, stats: sumStats(legs.map((l) => piecesStats(G, l))), pts: S, avoided };
+}
+
 // Several stats objects added up.
 export function sumStats(list) {
   const s = { len: 0, risk: [0, 0, 0], legal: [0, 0, 0], dirt: 0, ai: 0, gapLen: 0, gaps: 0, off: 0, offs: 0 };

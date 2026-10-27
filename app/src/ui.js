@@ -1,9 +1,10 @@
 // Panels (one bottom sheet at a time), the toolbar, status pills and toasts.
 import { SOURCES, LOCAL_OVERLAYS, SLOPE_CLASSES, OFFLINE_SOURCES, APP_NAME, DS_BASE, DS_OVERLAY_LIST } from './config.js';
 import { settings, saveSettings, defaultArea } from './settings.js';
-import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw, setAiTiles, setCursor, setSteep } from './mapview.js';
+import { isDesktop, applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw, setAiTiles, setCursor, setSteep } from './mapview.js';
 import { initBuilder, startBuilder, builderClick, renderRoute, builderActive, leave as leaveBuilder, panelShown } from './builder.js';
 import { initNav, startNav, closeLayers as closeNavLayers } from './nav.js';
+import { initSend, sendRoute, renderSend } from './sendroute.js';
 import { profileSection, fitInView } from './profileview.js';
 import { elevationProfile } from '../../core/profile.js';
 import { unlock as aiUnlock, update as aiUpdate, removeStored as aiRemove, loadAiGraph } from './aibundle.js';
@@ -43,6 +44,7 @@ const PANELS = {
   route: ['Your route', renderRoute],
   profile: ['Elevation', renderProfile],
   more: ['More', renderMore],
+  send: [isDesktop() ? 'Send to phone' : 'Share a route', renderSend],
   info: ['Track info', renderInfo],
 };
 
@@ -787,6 +789,7 @@ function renderPlan() {
       btn('Show', () => { p.sel = i; drawPlan(); fitCoords(r.coords); closePanel(); }),
       btn('Navigate', () => startNav({ coords: r.coords, title: `Route ${i + 1} (${fmtDist(s.len)})`, stats: s, unsaved: true })),
       btn('Profile', () => editRoute(`Route ${i + 1}`, r.coords)),
+      isDesktop() ? btn('Send to phone', () => sendRoute({ name: `Plan ${fmtDist(s.len)} #${i + 1}`, coords: r.coords, len: s.len })) : null,
       btn('Save', async () => {
         const d = new Date();
         const name = `Plan ${fmtDist(s.len)} ${d.toLocaleDateString()} #${i + 1}`;
@@ -1220,7 +1223,9 @@ async function renderTracks() {
         t.plan?.built ? btn('Edit', () => { if (app.draw) endDraw(); startBuilder({ track: t }); }) : null,
         lines ? btn('Profile', () => (t.kind === 'planned' ? editRoute(t.name, trackLines(t).flat(), t)
           : openProfile(t.name, trackLines(t).flat()))) : null,
-        lines ? btn('Investigate', () => runInvestigation(t), t.plan?.built ? '' : 'primary') : null,
+        lines && t.kind !== 'tet' ? btn(isDesktop() ? 'Send to phone' : 'Share link', () => sendRoute({ name: t.name, coords: trackLines(t).flat(),
+          built: t.plan?.built ?? null, len: t.stats.length }), isDesktop() ? 'primary' : '') : null,
+        lines ? btn('Investigate', () => runInvestigation(t)) : null,
         lines ? btn('Save detail offline', () => { presetCorridor(t.id); openPanel('downloads'); }) : null,
         btn('GPX', async () => { const r = await shareGPX(t); if (r === 'downloaded') toast('GPX saved to Downloads'); }),
         btn('Rename', async () => {
@@ -1490,7 +1495,8 @@ export function initUI(appState) {
   app.dlForm = { sources: ['ms-earth', 'dem'], areaType: 'bbox', trackId: null, buffer: 300, zmin: 10, zmax: 16 };
   if (app.debug) app.debug.ensureGraph = ensureGraph;          // for the e2e tests
   initBuilder({ app, ensureGraph, toast, openPanel, closePanel, rerender, current: () => current, refreshTracks: () => app.refreshTracks(),
-    onClose: () => { if (!app.nav) drawPlan(); }, navigate: (r) => startNav(r) });
+    onClose: () => { if (!app.nav) drawPlan(); }, navigate: (r) => startNav(r), send: (r) => sendRoute(r) });
+  initSend({ app, ensureGraph, toast, openPanel, rerender, refreshTracks: () => app.refreshTracks(), startNav, fitCoords });
   initNav({ app, toast, ensureGraph, startBuilder, closePanel, startRecording, stopRecording, updateStatus, saveRoute,
     leaveBuilder: (force = false) => { leaveBuilder(force); return !app.build; },
     showPlan: (on) => (on ? drawPlan() : setPlan(app.map, { type: 'FeatureCollection', features: [] })) });
