@@ -65,6 +65,13 @@ Beliș-Fântânele to the Bihor heights, south to Aiud. An installable web app f
   never sees. TET / ACT files are never sent.
 - **3D terrain (PC):** tilt and turn the map over the relief, with a slider that raises it (x1 to x5) so the steep
   ground and the valleys read at a glance. Heights come from the ~30 m model.
+  - **Fly (F):** W/S forward and back, A/D sideways, Q/E down and up, drag or the arrow keys to look around, Shift
+    for five times the speed. The speed goes with the height, and the camera does not dive into the ground.
+  - **Orbit (O):** the view turns slowly around the middle. **[ ]** lower or raise the relief.
+  - **Fly through:** on a track or a Plan route, the camera rides it, with the km, the height and the grade; play,
+    pause, x1-x8, a bar to scrub.
+- **Area pack updates:** when the server has a newer area pack than the phone, the app says so at start-up and
+  marks Offline.
 
 ## Install on Android
 

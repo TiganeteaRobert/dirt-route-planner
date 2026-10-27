@@ -5,6 +5,7 @@ import { isDesktop, applyLayers, setArea, effectiveBase, setRecLine, setSelected
 import { initBuilder, startBuilder, builderClick, renderRoute, builderActive, leave as leaveBuilder, panelShown } from './builder.js';
 import { initNav, startNav, closeLayers as closeNavLayers } from './nav.js';
 import { initSend, sendRoute, renderSend } from './sendroute.js';
+import { startTour } from './fly.js';
 import { profileSection, fitInView } from './profileview.js';
 import { elevationProfile } from '../../core/profile.js';
 import { unlock as aiUnlock, update as aiUpdate, removeStored as aiRemove, loadAiGraph } from './aibundle.js';
@@ -790,6 +791,7 @@ function renderPlan() {
       btn('Navigate', () => startNav({ coords: r.coords, title: `Route ${i + 1} (${fmtDist(s.len)})`, stats: s, unsaved: true })),
       btn('Profile', () => editRoute(`Route ${i + 1}`, r.coords)),
       isDesktop() ? btn('Send to phone', () => sendRoute({ name: `Plan ${fmtDist(s.len)} #${i + 1}`, coords: r.coords, len: s.len })) : null,
+      isDesktop() ? btn('Fly through', () => { closePanel(); startTour({ coords: r.coords, title: `Route ${i + 1} (${fmtDist(s.len)})` }); }) : null,
       btn('Save', async () => {
         const d = new Date();
         const name = `Plan ${fmtDist(s.len)} ${d.toLocaleDateString()} #${i + 1}`;
@@ -1111,6 +1113,20 @@ async function packCard() {
       }) : null));
 }
 
+// At start-up, online: an area pack newer than the one on this phone is said once (a toast) and marked on Offline.
+export async function checkPackUpdate() {
+  if (!packInstalled.area || !navigator.onLine || settings.offlineOnly) return;
+  const m = await fetchManifest().catch(() => null);
+  if (!m) return;
+  app.packManifest = m;
+  const names = Object.keys(m.files).filter((n) => PACK_FILES[n] && packInstalled[n]);
+  if (!names.some((n) => packInstalled[n].version !== m.version)) return;
+  const size = Object.keys(m.files).filter((n) => PACK_FILES[n]).reduce((a, n) => a + m.files[n].bytes, 0);
+  document.querySelector('#toolbar [data-sheet="downloads"]')?.classList.add('has-update');
+  toast(`A newer area pack is out (${m.version}, ${fmtBytes(size)}): yours is ${packInstalled.area.version}. Update it in Offline (on Wi-Fi).`,
+    { action: 'Offline', onAction: () => openPanel('downloads'), ms: 12000 });
+}
+
 async function runPackInstall(m) {
   if (!navigator.onLine) { toast('No network'); return; }
   try {
@@ -1131,6 +1147,7 @@ async function runPackInstall(m) {
     clearDemCaches();
     reloadPack(app.map);
     applyLayers(app.map);
+    document.querySelector('#toolbar [data-sheet="downloads"]')?.classList.remove('has-update');
     toast(`Area pack ${m.version} installed: the DirtScout map now works offline.`);
   } catch (e) {
     packJob = null;
@@ -1225,6 +1242,7 @@ async function renderTracks() {
           : openProfile(t.name, trackLines(t).flat()))) : null,
         lines && t.kind !== 'tet' ? btn(isDesktop() ? 'Send to phone' : 'Share link', () => sendRoute({ name: t.name, coords: trackLines(t).flat(),
           built: t.plan?.built ?? null, len: t.stats.length }), isDesktop() ? 'primary' : '') : null,
+        lines && isDesktop() ? btn('Fly through', () => { closePanel(); startTour({ coords: trackLines(t).flat(), title: t.name }); }) : null,
         lines ? btn('Investigate', () => runInvestigation(t)) : null,
         lines ? btn('Save detail offline', () => { presetCorridor(t.id); openPanel('downloads'); }) : null,
         btn('GPX', async () => { const r = await shareGPX(t); if (r === 'downloaded') toast('GPX saved to Downloads'); }),
@@ -1495,7 +1513,8 @@ export function initUI(appState) {
   app.dlForm = { sources: ['ms-earth', 'dem'], areaType: 'bbox', trackId: null, buffer: 300, zmin: 10, zmax: 16 };
   if (app.debug) app.debug.ensureGraph = ensureGraph;          // for the e2e tests
   initBuilder({ app, ensureGraph, toast, openPanel, closePanel, rerender, current: () => current, refreshTracks: () => app.refreshTracks(),
-    onClose: () => { if (!app.nav) drawPlan(); }, navigate: (r) => startNav(r), send: (r) => sendRoute(r) });
+    onClose: () => { if (!app.nav) drawPlan(); }, navigate: (r) => startNav(r), send: (r) => sendRoute(r),
+    tour: isDesktop() ? (r) => { closePanel(); startTour(r); } : null });
   initSend({ app, ensureGraph, toast, openPanel, rerender, refreshTracks: () => app.refreshTracks(), startNav, fitCoords });
   initNav({ app, toast, ensureGraph, startBuilder, closePanel, startRecording, stopRecording, updateStatus, saveRoute,
     leaveBuilder: (force = false) => { leaveBuilder(force); return !app.build; },

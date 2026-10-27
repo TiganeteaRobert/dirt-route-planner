@@ -7,10 +7,12 @@ import { initPacks } from './pack.js';
 import { createMap, applyLayers, setTracks, setRecLine, setAiTiles, MeMarker } from './mapview.js';
 import { loadStored as loadAi } from './aibundle.js';
 import { addBlobTiles } from './pack.js';
-import { initUI, toast, refreshAi } from './ui.js';
+import { initUI, toast, refreshAi, checkPackUpdate } from './ui.js';
 import { resumeNav } from './nav.js';
 import { receive as receiveRoute } from './sendroute.js';
 import { initTerrain3d, set3d } from './terrain3d.js';
+import { initFly, flyState } from './fly.js';
+import { isDesktop } from './mapview.js';
 import { listTracks, mapData } from './tracks.js';
 import { downloader } from './downloads.js';
 import { recorder, gps } from './gps.js';
@@ -42,6 +44,8 @@ if (app.ai?.tiles) addBlobTiles('ai', app.ai.tiles);
 
 initUI(app);
 initTerrain3d(app.map);          // the PC only
+if (isDesktop()) initFly(app);    // fly over the 3D terrain (W A S D), orbit, fly through a route
+app.debug.fly = flyState;
 
 app.map.on('load', async () => {
   if (app.ai?.tiles) setAiTiles(app.map, true);
@@ -62,6 +66,7 @@ app.map.on('load', async () => {
   if (settings.terrain3d?.on) set3d(true, false);
   resumeNav();                     // a route that was being ridden when the app closed
   receiveRoute();                  // a route sent from another device (Send to phone) opened the app
+  setTimeout(checkPackUpdate, 5000);   // after the other notices: a newer area pack on the server
 });
 
 window.addEventListener('beforeinstallprompt', (e) => {

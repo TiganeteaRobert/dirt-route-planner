@@ -21,7 +21,7 @@ import { profileSection, fitInView } from './profileview.js';
 const $ = (id) => document.getElementById(id);
 const SNAP_PX = 44;              // a tap holds on to the nearest way within this many screen pixels (25 m at least)
 const COLOR = '#ff6d00';
-let ctx = null;                  // {app, ensureGraph, toast, openPanel, closePanel, rerender, current, refreshTracks, onClose, navigate, send}
+let ctx = null;                  // {app, ensureGraph, toast, openPanel, closePanel, rerender, current, refreshTracks, onClose, navigate, send, tour}
 const B = () => ctx?.app.build ?? null;
 
 export function initBuilder(c) {
@@ -628,6 +628,7 @@ export function renderRoute() {
       const res = await summary(b);
       ctx.send?.({ name: b.track?.name ?? b.title ?? `My route ${fmtDist(res.stats.len)}`, coords: res.coords, built: res.built, len: res.stats.len });
     }),
+    ctx.tour && !b.nav ? btn('Fly through', () => ctx.tour({ coords: routeLine(b), title: b.track?.name ?? b.title ?? 'My route' })) : null,
     btn('GPX', async () => {
       const r = await shareGPX({ name: b.track?.name ?? b.title ?? `DirtScout route ${fmtDist(L)}`, fc: lineFc(routeLine(b), 'route') });
       if (r === 'downloaded') ctx.toast('GPX saved to Downloads');

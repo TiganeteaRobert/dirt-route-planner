@@ -41,8 +41,18 @@ export function initTerrain3d(m) {
     label();
     if (on3d()) map.setTerrain({ source: 'terrain', exaggeration: settings.terrain3d.exag });
   });
-  slider.addEventListener('change', () => saveSettings());
+  slider.addEventListener('change', () => { saveSettings(); slider.blur(); });       // the keys go back to flying
   $('t3d-off').addEventListener('click', () => set3d(false));
+}
+
+// The relief's height (x1-x5), from the slider or the [ ] keys.
+export function setExaggeration(x) {
+  settings.terrain3d.exag = Math.round(Math.max(1, Math.min(5, x)) * 10) / 10;
+  const slider = $('t3d-exag');
+  if (slider) slider.value = settings.terrain3d.exag;
+  label();
+  if (on3d()) map.setTerrain({ source: 'terrain', exaggeration: settings.terrain3d.exag });
+  saveSettings();
 }
 
 function label() {
