@@ -3,6 +3,7 @@ import { SOURCES, LOCAL_OVERLAYS, SLOPE_CLASSES, OFFLINE_SOURCES, APP_NAME, DS_B
 import { settings, saveSettings, defaultArea } from './settings.js';
 import { applyLayers, setArea, effectiveBase, setRecLine, setSelected, reloadPack, packUsable, setPlan, setInvestigation, setDraw, setAiTiles, setCursor, setSteep } from './mapview.js';
 import { initBuilder, startBuilder, builderClick, renderRoute, builderActive, leave as leaveBuilder, panelShown } from './builder.js';
+import { initNav, startNav, closeLayers as closeNavLayers } from './nav.js';
 import { profileSection, fitInView } from './profileview.js';
 import { elevationProfile } from '../../core/profile.js';
 import { unlock as aiUnlock, update as aiUpdate, removeStored as aiRemove, loadAiGraph } from './aibundle.js';
@@ -151,6 +152,10 @@ async function renderLayers() {
     }),
     h('span', { class: 'grow' }, DS_BASE.name),
     h('span', { class: `badge${packInstalled.area ? ' ok' : ' online'}` }, packInstalled.area ? 'on phone' : 'online until installed')));
+  out.push(h('label', { class: 'row' },
+    h('input', { type: 'radio', name: 'base', checked: settings.base === 'none',
+      onchange: () => { settings.base = 'none'; saveSettings(); applyLayers(app.map); rerender(); } }),
+    h('span', { class: 'grow' }, 'No base map: only what is switched on below')));
   for (const id of BASES) {
     const s = SOURCES[id];
     const st = app.stats[id];
@@ -341,6 +346,7 @@ function renderInfo() {
 
 function onMapClick(e) {
   if (app.build) { builderClick(e); return; }
+  if (app.nav) { closeNavLayers(); return; }                    // riding: a tap on the map only closes the layer chips
   if (app.draw) { addDrawPoint(e); return; }
   if (app.planPick) {
     app.planPick = false;
@@ -779,6 +785,7 @@ function renderPlan() {
     h('div', { class: 'note' }, `green ${pct(s.green)} · yellow ${pct(s.yellow)} · red ${pct(s.red)}`),
     h('div', { class: 'row-btns' },
       btn('Show', () => { p.sel = i; drawPlan(); fitCoords(r.coords); closePanel(); }),
+      btn('Navigate', () => startNav({ coords: r.coords, title: `Route ${i + 1} (${fmtDist(s.len)})`, stats: s, unsaved: true })),
       btn('Profile', () => editRoute(`Route ${i + 1}`, r.coords)),
       btn('Save', async () => {
         const d = new Date();
@@ -1209,7 +1216,8 @@ async function renderTracks() {
       ].filter(Boolean).join(' · ')),
       h('div', { class: 'row-btns' },
         t.stats.bbox ? btn('Show', () => { fitTrack(t); closePanel(); }) : null,
-        t.plan?.built ? btn('Edit', () => { if (app.draw) endDraw(); startBuilder({ track: t }); }, 'primary') : null,
+        lines ? btn('Navigate', () => { if (app.draw) endDraw(); startNav({ coords: trackLines(t).flat(), track: t }); }, 'primary') : null,
+        t.plan?.built ? btn('Edit', () => { if (app.draw) endDraw(); startBuilder({ track: t }); }) : null,
         lines ? btn('Profile', () => (t.kind === 'planned' ? editRoute(t.name, trackLines(t).flat(), t)
           : openProfile(t.name, trackLines(t).flat()))) : null,
         lines ? btn('Investigate', () => runInvestigation(t), t.plan?.built ? '' : 'primary') : null,
@@ -1232,6 +1240,24 @@ async function renderTracks() {
 }
 
 // ---------------------------------------------------------------- Elevation profile of a track or a route
+
+// A route ridden with Navigate, kept in Tracks (replacing trackId when given). stats: a route's own (from the builder
+// or Plan), else worked out from its elevation; ask: let the rider name it.
+async function saveRoute({ name, coords, stats, built, trackId = null, color = null, ask = false }) {
+  if (ask) {
+    const n = prompt('Name of this route', `${name} ${new Date().toLocaleDateString()}`);
+    if (n === null) return null;
+    name = n.trim() || name;
+  }
+  let st = stats;
+  if (!st?.climbs) {
+    const prof = await elevationProfile(coords, elevationAt).catch(() => null);
+    st = { ...(stats ?? {}), up: prof?.up ?? 0, dn: prof?.down ?? 0, climbs: [], green: stats?.green ?? 0, yellow: stats?.yellow ?? 0, red: stats?.red ?? 0 };
+  }
+  const t = await savePlanned(name, coords, st, built ? { built } : {}, color ?? '#ff6d00', trackId);
+  await app.refreshTracks();
+  return t;
+}
 
 // A route's profile in edit mode: the route opens in "Make my own route" (its points, or points along its line)
 // with the profile under the map. The generated routes leave the map meanwhile (back when the builder closes).
@@ -1313,14 +1339,14 @@ async function startRecording() {
   await recorder.start();
   app.recLine = [];
   setRecLine(app.map, []);
-  app.follow = true;
+  if (!app.nav) app.follow = true;                    // riding a route: its own camera follows
   toast('Recording. Keep the app on screen.');
   updateStatus();
   rerender();
 }
 
 async function stopRecording() {
-  if (!confirm('Stop recording and save the ride?')) return;
+  if (!confirm('Stop recording and save the ride?')) return false;
   const rec = await recorder.stop();
   setRecLine(app.map, []);
   app.recLine = [];
@@ -1464,7 +1490,10 @@ export function initUI(appState) {
   app.dlForm = { sources: ['ms-earth', 'dem'], areaType: 'bbox', trackId: null, buffer: 300, zmin: 10, zmax: 16 };
   if (app.debug) app.debug.ensureGraph = ensureGraph;          // for the e2e tests
   initBuilder({ app, ensureGraph, toast, openPanel, closePanel, rerender, current: () => current, refreshTracks: () => app.refreshTracks(),
-    onClose: () => drawPlan() });
+    onClose: () => { if (!app.nav) drawPlan(); }, navigate: (r) => startNav(r) });
+  initNav({ app, toast, ensureGraph, startBuilder, closePanel, startRecording, stopRecording, updateStatus, saveRoute,
+    leaveBuilder: (force = false) => { leaveBuilder(force); return !app.build; },
+    showPlan: (on) => (on ? drawPlan() : setPlan(app.map, { type: 'FeatureCollection', features: [] })) });
   const kept = settings.plan;
   app.plan = { startMode: kept.startMode ?? 'gps', start: kept.start ?? null, kmMin: kept.kmMin ?? 30, kmMax: kept.kmMax ?? 40,
     shape: 'loop', climbs: 1, minClimbGrade: 15, avoidRed: true, preferDirt: true, allowNoAccess: false, results: [], sel: 0,
@@ -1496,7 +1525,7 @@ export function initUI(appState) {
   gps.addEventListener('fix', (e) => {
     const f = e.detail;
     app.me.update(f);
-    if (app.follow) {
+    if (app.follow && !app.nav) {
       const firstFix = !app.hadFix;
       app.map.easeTo({ center: [f.lon, f.lat], zoom: firstFix ? Math.max(app.map.getZoom(), 15) : app.map.getZoom(), duration: firstFix ? 600 : 300 });
     }

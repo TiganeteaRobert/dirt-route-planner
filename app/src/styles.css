@@ -403,3 +403,172 @@ a.btn { display: inline-block; text-decoration: none; margin: 10px 0; }
   #toast { left: auto; width: 420px; }
   .maplibregl-ctrl-top-right { right: 0; }
 }
+
+/* ---- riding a route (app/src/nav.js): full screen, big buttons on the sides ---- */
+body.navigating { --toolbar-h: env(safe-area-inset-bottom); }
+body.navigating #toolbar, body.navigating #status, body.navigating .maplibregl-ctrl-top-right, body.navigating #t3d { display: none !important; }
+body.nav-editing #nav { display: none !important; }
+body.navigating #buildbar { right: 10px; }
+body.navigating:not(.nav-editing) #toast { bottom: calc(96px + env(safe-area-inset-bottom)); }
+#nav { position: absolute; inset: 0; pointer-events: none; z-index: 8; }
+#nav > * { pointer-events: auto; }
+.nav-banner {
+  position: absolute;
+  top: calc(8px + env(safe-area-inset-top));
+  left: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 76px;
+  box-sizing: border-box;
+  padding: 10px 14px;
+  border-radius: 16px;
+  background: #0f4d36;
+  color: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+.nav-banner.approach { background: #1a3d63; }
+.nav-banner.off { background: #a34400; }
+.nav-banner.done { background: #11602b; }
+.nav-icon { flex: none; width: 58px; height: 58px; }
+.nav-icon svg { width: 58px; height: 58px; display: block; }
+.nav-main { font: 900 30px/1.05 system-ui, sans-serif; }
+.nav-sub { font: 700 17px/1.2 system-ui, sans-serif; margin-top: 2px; }
+.nav-note {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 3px 9px;
+  border-radius: 8px;
+  background: #e53935;
+  font: 800 15px/1.2 system-ui, sans-serif;
+}
+.nav-drive { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.nav-drive .btn { display: inline-flex; align-items: center; margin: 0; min-height: 48px; padding: 0 16px; background: #fff; color: #111; border: 0; }
+.nav-side {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-40%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.nav-side-left { left: 8px; }
+.nav-side-right { right: 8px; }
+.nav-btn {
+  appearance: none;
+  width: 64px;
+  height: 64px;
+  border: 0;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #111511;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font: 800 11.5px/1 system-ui, sans-serif;
+  touch-action: manipulation;
+}
+.nav-btn svg { width: 30px; height: 30px; fill: currentColor; }
+.nav-btn.on { background: var(--accent); }
+.nav-btn.nav-zoom { font: 900 34px/1 system-ui, sans-serif; }
+#nav-rec-btn.on { color: #c4001d; }
+#nav-cam .cam-3d { display: none; }
+#nav-cam[data-mode='follow'] .cam-3d { display: inline; }
+#nav-cam[data-mode='follow'] .cam-north { display: none; }
+#nav-cam[data-mode='north'] .cam-north { fill: #c62828; }
+.nav-layers {
+  position: absolute;
+  left: 82px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: min(250px, calc(100vw - 170px));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+.nav-layers-title { flex-basis: 100%; font: 800 13px system-ui, sans-serif; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.chip {
+  appearance: none;
+  min-height: 46px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 2px solid #c9cec5;
+  background: #fff;
+  color: #111511;
+  font: 800 15px system-ui, sans-serif;
+  touch-action: manipulation;
+}
+.chip.on { background: var(--accent); border-color: var(--accent); }
+.chip:disabled { opacity: 0.55; }
+.chip.close { flex-basis: 100%; background: #141a15; color: #fff; border-color: #141a15; }
+.nav-recenter {
+  position: absolute;
+  bottom: calc(100px + env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  min-height: 54px;
+  padding: 0 26px;
+  border: 0;
+  border-radius: 999px;
+  background: #1565c0;
+  color: #fff;
+  font: 800 18px system-ui, sans-serif;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+.nav-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+  background: var(--bar);
+  color: var(--bar-fg);
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.4);
+}
+.nav-exit { flex: none; width: 58px; height: 58px; border-radius: 50%; border: 0; background: #c62828; color: #fff; font-size: 24px; }
+#nav-togo { font: 900 30px/1 system-ui, sans-serif; }
+.nav-togo-l { font: 700 15px system-ui, sans-serif; opacity: 0.8; }
+.nav-meta { font: 700 16px/1.3 system-ui, sans-serif; opacity: 0.88; margin-top: 3px; }
+.nav-rec { color: #ff5252; font: 900 15px system-ui, sans-serif; animation: pulse 1.2s ease-in-out infinite; }
+@media (min-width: 760px) {
+  .nav-banner { right: auto; width: 460px; }
+}
+
+/* the rider while navigating: a big arrow that points the way (it lies flat on a tilted map) */
+.me-nav { display: none; position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; transform: translate(-50%, -50%); }
+.me-nav svg { width: 100%; height: 100%; filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6)); }
+.me.nav .me-nav { display: block; }
+.me.nav .me-dot, .me.nav .me-arrow { display: none !important; }
+
+/* route builder: the rider's own dot, the Avoid button while marking */
+.rb-pt.here { background: #1e88e5; }
+#buildbar #build-avoid.on { background: #d50000; border-color: #d50000; color: #fff; }
+
+/* ---- the desktop's 3D terrain (app/src/terrain3d.js) ---- */
+.ctrl-3d { font: 900 14px system-ui, sans-serif !important; }
+.ctrl-3d.on { background: var(--accent) !important; }
+.t3d {
+  position: absolute;
+  left: 12px;
+  bottom: calc(var(--toolbar-h) + 44px);
+  width: 320px;
+  padding: 10px 14px 4px;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  z-index: 6;
+}
+.t3d-head { display: flex; align-items: center; gap: 10px; }
+.t3d .slider { display: flex; flex-direction: column; align-items: stretch; gap: 4px; margin: 8px 0 2px; padding: 0; color: var(--ink); font-weight: 800; }
+.t3d .slider input { width: 100%; }

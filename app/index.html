@@ -40,10 +40,49 @@
       <div class="row-btns">
         <button type="button" class="btn" id="build-undo">Undo</button>
         <button type="button" class="btn" id="build-loop">Loop</button>
+        <button type="button" class="btn" id="build-avoid" hidden>Avoid</button>
         <button type="button" class="btn" id="build-stats">Profile</button>
         <button type="button" class="btn primary" id="build-save">Save</button>
         <button type="button" class="btn" id="build-exit" aria-label="Leave the route builder">&#x2715;</button>
       </div>
+    </div>
+    <div id="nav" hidden>
+      <div id="nav-banner" class="nav-banner" aria-live="polite"></div>
+      <div class="nav-side nav-side-left">
+        <button type="button" class="nav-btn" id="nav-layers-btn">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 8.5 12 14l10-5.5L12 3Zm-7.9 9.6L2 13.8 12 19.3l10-5.5-2.1-1.2-7.9 4.4-7.9-4.4Z"/></svg>
+          <span>Layers</span>
+        </button>
+        <button type="button" class="nav-btn" id="nav-edit">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25Zm17.7-10.2a1 1 0 0 0 0-1.42l-2.33-2.33a1 1 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.83-1.83Z"/></svg>
+          <span>Edit</span>
+        </button>
+        <button type="button" class="nav-btn" id="nav-rec-btn">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6.5"/><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Z"/></svg>
+          <span>Record</span>
+        </button>
+      </div>
+      <div class="nav-side nav-side-right">
+        <button type="button" class="nav-btn" id="nav-cam" aria-label="Camera: tap to switch">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path class="cam-north" d="M12 2 6 20l6-4 6 4L12 2Z"/><path class="cam-3d" d="M4 20 9.5 5h5L20 20H4Zm5.6-5h4.8l-1.2-5h-2.4l-1.2 5Z"/></svg>
+          <span>Heading</span>
+        </button>
+        <button type="button" class="nav-btn nav-zoom" id="nav-zin" aria-label="Zoom in">+</button>
+        <button type="button" class="nav-btn nav-zoom" id="nav-zout" aria-label="Zoom out">&minus;</button>
+      </div>
+      <div id="nav-layers" class="nav-layers" hidden></div>
+      <button type="button" id="nav-recenter" class="nav-recenter" hidden>Re-centre</button>
+      <div id="nav-bottom" class="nav-bottom">
+        <button type="button" id="nav-exit" class="nav-exit" aria-label="End navigation">&#x2715;</button>
+        <div class="grow"><b id="nav-togo">&ndash;</b> <span class="nav-togo-l">to go</span><div id="nav-meta" class="nav-meta"></div></div>
+        <span id="nav-rec" class="nav-rec" hidden>&#9679; REC</span>
+      </div>
+    </div>
+    <div id="t3d" class="t3d" hidden>
+      <div class="t3d-head"><strong class="grow">3D terrain</strong><button type="button" class="btn small" id="t3d-off">Flat map</button></div>
+      <label class="slider"><span id="t3d-label">Height</span><input type="range" id="t3d-exag" min="1" max="5" step="0.1"></label>
+      <p class="note">Right-drag (or Ctrl + drag) to tilt and turn, the wheel to zoom, Shift + arrow keys. Raise the height to see the
+        steep ground and the valleys. Heights from a ~30 m elevation model: short steep pitches do not show.</p>
     </div>
     <nav id="toolbar">
       <button type="button" data-sheet="layers">

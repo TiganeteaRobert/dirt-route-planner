@@ -5,6 +5,9 @@
 // chart, and the route stays editable under it (the steep stretches red on the map, the chart updating in place).
 // Routes saved from here keep their points; a generated or saved route without them gets points along its line.
 // Opening a route's profile from Plan or Tracks starts here, with the profile open.
+// Avoid: tap a stretch and the route goes around it (the stretch costs 50 times more, so it is ridden only when there
+// is no other way); saved with the route. While riding (app/src/nav.js), Edit opens the route here with a blue dot where
+// the rider is, and Continue rides the new route from that dot.
 import { Marker, Popup } from 'maplibre-gl';
 import { traceCost, snapToNetwork, snapToPieces, leg, pieceCoords, piecesCoords, piecesStats, sumStats, pointsForLine } from '../../core/builder.js';
 import { haversine } from '../../core/routing.js';
@@ -18,15 +21,16 @@ import { profileSection, fitInView } from './profileview.js';
 const $ = (id) => document.getElementById(id);
 const SNAP_PX = 44;              // a tap holds on to the nearest way within this many screen pixels (25 m at least)
 const COLOR = '#ff6d00';
-let ctx = null;                  // {app, ensureGraph, toast, openPanel, closePanel, rerender, current, refreshTracks, onClose}
+let ctx = null;                  // {app, ensureGraph, toast, openPanel, closePanel, rerender, current, refreshTracks, onClose, navigate}
 const B = () => ctx?.app.build ?? null;
 
 export function initBuilder(c) {
   ctx = c;
   $('build-undo').addEventListener('click', undo);
   $('build-loop').addEventListener('click', () => toggleLoop());
+  $('build-avoid').addEventListener('click', () => avoidMode());
   $('build-stats').addEventListener('click', openRoutePanel);
-  $('build-save').addEventListener('click', save);
+  $('build-save').addEventListener('click', () => (B()?.nav ? navContinue() : save()));
   $('build-exit').addEventListener('click', () => leave());
 }
 
@@ -64,7 +68,22 @@ export function routeLine(b = B()) {
 
 export const routeStats = (b = B()) => sumStats(b.legs.map((l) => l.stats));
 
-const snapshot = (b) => ({ G: b.G, closed: b.closed, pts: b.pts.map((p) => ({ s: { ...p.s } })) });
+const snapshot = (b) => ({ G: b.G, closed: b.closed, pts: b.pts.map((p) => ({ s: { ...p.s }, here: p.here })), avoidAt: new Map(b.avoidAt) });
+
+// The way the builder joins two points, with the avoided stretches 50 times dearer (taken only when nothing else goes).
+function makeCost(b) {
+  const base = traceCost(b.G);
+  return (e) => (b.avoidAt.has(e) ? base(e) * 50 + 20000 : base(e));
+}
+
+// Avoided stretches are kept as places (edge ids change with the area pack): hold them on to the network again.
+function snapAvoid(b, places) {
+  b.avoidAt = new Map();
+  for (const [lon, lat] of places) {
+    const s = snapToNetwork(b.G, ctx.app.graphIndex, lon, lat, 15);
+    if (s) b.avoidAt.set(s.e, [lon, lat]);
+  }
+}
 
 // The nearest way to a place, within SNAP_PX on screen.
 function snapAt(b, lon, lat) {
@@ -79,10 +98,11 @@ async function ready(b) {
   const G = await ctx.ensureGraph();
   if (G === b.G) return;
   b.G = G;
-  b.cost = traceCost(G);
+  snapAvoid(b, [...b.avoidAt.values()]);
+  b.cost = makeCost(b);
   b.cache.clear();
   const n = b.pts.length;
-  b.pts = b.pts.map((p) => ({ s: snapToNetwork(G, ctx.app.graphIndex, p.s.lon, p.s.lat, 500) })).filter((p) => p.s);
+  b.pts = b.pts.map((p) => ({ s: snapToNetwork(G, ctx.app.graphIndex, p.s.lon, p.s.lat, 500), here: p.here })).filter((p) => p.s);
   b.undo = [];
   if (b.pts.length < n) ctx.toast(`${n - b.pts.length} point${n - b.pts.length === 1 ? ' was' : 's were'} on a track that is no longer shown: removed.`);
   if (b.pts.length < 2) b.closed = false;
@@ -101,10 +121,12 @@ export function panelShown(name) {
 
 /**
  * opts: track (a saved route: its own points, else points along `line`, its line), line + title (a route that is not
- * saved yet, e.g. a generated one), profile (open the profile right away: edit while you look at the elevation).
+ * saved yet, e.g. a generated one), built ({pts, closed, avoid}: the points of a route made here, when there is no
+ * track), profile (open the profile right away: edit while you look at the elevation), nav (editing while riding:
+ * {here: {at [lon, lat], along (m along `line`), onRoute}, onContinue(result), onCancel()}).
  * With no options: a new route, tapped from scratch.
  */
-export async function startBuilder({ track = null, line = null, title = null, profile = false } = {}) {
+export async function startBuilder({ track = null, line = null, title = null, profile = false, built = null, nav = null } = {}) {
   if (B() && !track && !line) { ctx.closePanel(); return; }   // already building: back to the map
   if (B()) { leave(); if (B()) return; }                      // another route: leave the current one first
   ctx.closePanel();
@@ -115,16 +137,19 @@ export async function startBuilder({ track = null, line = null, title = null, pr
     ctx.toast(`Cannot build a route: ${e.message}`, { ms: 7000 });
     return;
   }
-  const b = { G, cost: traceCost(G), cache: new Map(), pts: [], legs: [], closed: false, undo: [], markers: [], menu: null,
-    track, title, dirty: false, profile: null, shown: null, profSeq: 0, before: null };
+  const b = { G, cost: null, cache: new Map(), pts: [], legs: [], closed: false, undo: [], markers: [], menu: null,
+    track, title, dirty: false, profile: null, shown: null, profSeq: 0, before: null, avoidAt: new Map(), avoiding: false, nav };
+  const kept = track?.plan?.built ?? built;
+  snapAvoid(b, kept?.avoid ?? []);
+  b.cost = makeCost(b);
   ctx.app.build = b;
   $('buildbar').hidden = false;
-  if (track?.plan?.built) {
-    for (const [lon, lat] of track.plan.built.pts) {
+  if (kept) {
+    for (const [lon, lat] of kept.pts) {
       const s = snapToNetwork(G, ctx.app.graphIndex, lon, lat, 200);
       if (s) b.pts.push({ s });
     }
-    b.closed = !!track.plan.built.closed && b.pts.length >= 2;
+    b.closed = !!kept.closed && b.pts.length >= 2;
   } else if (line) {
     // points along the line, as many as it takes for the builder to ride the same way
     bar('Getting the route ready to edit…');
@@ -140,17 +165,39 @@ export async function startBuilder({ track = null, line = null, title = null, pr
     b.closed = r.closed;
   }
   computeLegs(b);
+  if (nav?.here && b.legs.length) {
+    insertHere(b, nav.here);
+    computeLegs(b);
+  }
   draw();
   if (b.pts.length > 1) {
     scheduleProfile();
     if (profile) openRoutePanel();
-    else fit(routeLine(b));
+    else if (!nav) fit(routeLine(b));
   }
   const name = track?.name ?? title;
-  ctx.toast(name ? `Editing "${name}": drag a dot to take another way, tap the line to add one, tap a dot for its menu.`
+  ctx.toast(nav ? 'The blue dot is where you are. Drag a dot onto another track, tap the line to add a dot, or tap Avoid and then '
+    + 'a stretch: the route goes around it. Continue rides the new route.'
+    : name ? `Editing "${name}": drag a dot to take another way, tap the line to add one, tap a dot for its menu.`
     + `${profile ? ' Steep stretches are red on the map.' : ''}`
     : 'Tap where the route starts, then where it goes: each tap holds on to the nearest track and the route follows the tracks between your points.',
-  { ms: 7000 });
+  { ms: nav ? 9000 : 7000 });
+}
+
+// While riding: a point where the rider is, on the leg they are riding (by the distance along the route), or - off the
+// route - on the nearest way, between the points before and after them.
+function insertHere(b, here) {
+  let acc = 0, li = b.legs.length - 1;
+  for (let i = 0; i < b.legs.length; i++) {
+    acc += b.legs[i].stats.len;
+    if (acc >= here.along) { li = i; break; }
+  }
+  let s = here.onRoute ? snapToPieces(ctx.app.graphIndex, b.legs[li].pieces, here.at[0], here.at[1]) : null;
+  if (!s || s.d > 60) s = snapToNetwork(b.G, ctx.app.graphIndex, here.at[0], here.at[1], 150);
+  if (!s) return;
+  const on = b.pts.find((p) => haversine(p.s.lon, p.s.lat, s.lon, s.lat) < 3);
+  if (on) on.here = true;
+  else b.pts.splice(li + 1, 0, { s, here: true });
 }
 
 // The profile under the map: the route fitted into the map above it, every dot still draggable.
@@ -176,12 +223,42 @@ function close() {
   ctx.onClose?.();
 }
 
-// Leave the builder (asks first when there are unsaved changes).
+// Leave the builder (asks first when there are unsaved changes). While riding: back to the route as it was.
 export function leave(force = false) {
   const b = B();
   if (!b) return;
+  if (b.nav) {
+    if (!force && b.dirty && !confirm('Drop the changes and ride on with the route as it was?')) return;
+    close();
+    b.nav.onCancel?.();
+    return;
+  }
   if (!force && b.dirty && b.pts.length > 1 && !confirm('Leave without saving this route?')) return;
   close();
+}
+
+// While riding: ride the changed route (from the blue dot).
+async function navContinue() {
+  const b = B();
+  if (!b?.nav || b.pts.length < 2) return;
+  const res = await summary(b);
+  if (B() !== b) return;
+  const hi = b.pts.findIndex((p) => p.here);
+  res.hereAlong = hi > 0 ? b.legs.slice(0, hi).reduce((m, l) => m + l.stats.len, 0) : null;
+  res.changed = b.dirty;
+  close();
+  b.nav.onContinue(res);
+}
+
+// Ride the route on screen (Navigate).
+async function rideIt() {
+  const b = B();
+  if (!b || b.pts.length < 2 || !ctx.navigate) return;
+  const res = await summary(b);
+  if (B() !== b) return;
+  close();
+  ctx.navigate({ coords: res.coords, title: b.track?.name ?? b.title ?? 'My route', built: res.built,
+    track: b.dirty ? null : b.track, stats: res.stats, unsaved: b.dirty || !b.track });
 }
 
 function fit(coords) {
@@ -219,6 +296,9 @@ function drawLines() {
     }
     flush();
   });
+  for (const e of b.avoidAt.keys()) {
+    features.push({ type: 'Feature', properties: { kind: 'blocked' }, geometry: { type: 'LineString', coordinates: X.coords[e] } });
+  }
   setBuild(ctx.app.map, { type: 'FeatureCollection', features });
 }
 
@@ -251,8 +331,9 @@ function syncMarkers() {
     el.dataset.i = i;
     el.firstChild.textContent = String(i + 1);
     el.classList.toggle('start', i === 0);
+    el.classList.toggle('here', !!p.here);
     el.classList.toggle('small', b.pts.length > 12);                 // many dots (a long route): smaller ones
-    el.setAttribute('aria-label', `Route point ${i + 1}`);
+    el.setAttribute('aria-label', p.here ? `Route point ${i + 1}: where you are` : `Route point ${i + 1}`);
   });
 }
 
@@ -262,6 +343,7 @@ function bar(msg = null) {
   const n = b.pts.length;
   let text;
   if (msg) text = msg;
+  else if (b.avoiding) text = 'Tap the stretch to avoid (tap a red one to ride it again)';
   else if (!n) text = 'Tap the map where the route starts';
   else if (n === 1) text = 'Point 1 set: tap where the route goes next';
   else {
@@ -273,8 +355,13 @@ function bar(msg = null) {
   $('build-undo').disabled = !b.undo.length;
   $('build-loop').disabled = n < 2;
   $('build-loop').textContent = b.closed ? 'Open' : 'Loop';
+  $('build-loop').hidden = !!b.nav;                                // riding: Avoid in its place
+  $('build-avoid').hidden = !b.nav && !b.avoiding;
+  $('build-avoid').classList.toggle('on', b.avoiding);
+  $('build-avoid').disabled = n < 2;
   $('build-stats').disabled = n < 2;
   $('build-save').disabled = n < 2;
+  $('build-save').textContent = b.nav ? 'Continue' : 'Save';
 }
 
 // ---------------------------------------------------------------- edits
@@ -307,6 +394,7 @@ export async function builderClick(e) {
   const map = ctx.app.map;
   const box = [[e.point.x - 16, e.point.y - 16], [e.point.x + 16, e.point.y + 16]];
   const hit = map.queryRenderedFeatures(box, { layers: ['build-casing', 'build-line', 'build-off'] }).find((f) => f.properties.leg != null);
+  if (b.avoiding) { avoidAt(b, e, hit); return; }
   if (hit && b.legs[hit.properties.leg]) {
     const li = hit.properties.leg;
     const s = snapToPieces(ctx.app.graphIndex, b.legs[li].pieces, e.lngLat.lng, e.lngLat.lat);
@@ -334,8 +422,66 @@ export function undo() {
   const u = b.undo.pop();
   b.closed = u.closed;
   b.pts = u.G === b.G ? u.pts
-    : u.pts.map((p) => ({ s: snapToNetwork(b.G, ctx.app.graphIndex, p.s.lon, p.s.lat, 200) })).filter((p) => p.s);
+    : u.pts.map((p) => ({ s: snapToNetwork(b.G, ctx.app.graphIndex, p.s.lon, p.s.lat, 200), here: p.here })).filter((p) => p.s);
+  if (u.G === b.G) b.avoidAt = u.avoidAt;
+  else snapAvoid(b, [...u.avoidAt.values()]);
+  b.cache.clear();
   changed(b);
+}
+
+// ---------------------------------------------------------------- avoid a stretch
+
+// The next tap marks a stretch to avoid (or rides a marked one again).
+export function avoidMode(on = !B()?.avoiding) {
+  const b = B();
+  if (!b) return;
+  closeMenu();
+  b.avoiding = on;
+  if (on && ctx.current() === 'route') ctx.closePanel();
+  bar();
+  if (on) ctx.toast('Tap the stretch of track you want to avoid: the route goes around it.', { ms: 5000 });
+}
+
+// The stretch under a tap: the way between two junctions (on the route line when the tap is on it).
+function avoidAt(b, e, hit) {
+  const X = ctx.app.graphIndex;
+  let s = hit && b.legs[hit.properties.leg] ? snapToPieces(X, b.legs[hit.properties.leg].pieces, e.lngLat.lng, e.lngLat.lat) : null;
+  if (!s) {
+    // a marked stretch (to ride it again) when the tap is about as near it as any track, else the nearest track
+    const marked = [...b.avoidAt.keys()].map((k) => snapToNetwork(b.G, X, e.lngLat.lng, e.lngLat.lat, 60, (x) => x !== k)).filter(Boolean)
+      .sort((p, q) => p.d - q.d)[0];
+    const any = snapAt(b, e.lngLat.lng, e.lngLat.lat);
+    s = marked && (!any || marked.d <= any.d + 8) ? marked : any;
+  }
+  b.avoiding = false;
+  if (!s) {
+    ctx.toast('No track near here: tap on the stretch itself.');
+    bar();
+    return;
+  }
+  pushUndo(b);
+  const before = routeStats(b).len;
+  if (b.avoidAt.has(s.e)) {
+    b.avoidAt.delete(s.e);
+    b.cache.clear();
+    changed(b);
+    ctx.toast('The route may ride that stretch again.');
+    return;
+  }
+  // the point of the stretch nearest its middle is kept, so it holds on to the same way after an area pack update
+  const c = X.coords[s.e];
+  b.avoidAt.set(s.e, c[Math.floor(c.length / 2)]);
+  // points on the stretch would keep the route on it: they go (not the first, the last or the rider's own)
+  const n = b.pts.length;
+  const dropped = b.pts.filter((p, i) => p.s.e === s.e && i > 0 && i < n - 1 && !p.here).length;
+  b.pts = b.pts.filter((p, i) => !(p.s.e === s.e && i > 0 && i < n - 1 && !p.here));
+  b.cache.clear();
+  changed(b);
+  const still = b.legs.some((l) => l.pieces.some((p) => !p.straight && p.e === s.e));
+  const diff = routeStats(b).len - before;
+  ctx.toast(still ? 'No way around that stretch on the known tracks: the route still rides it (marked red).'
+    : `The route goes around it (${diff >= 0 ? '+' : '−'}${fmtDist(Math.abs(diff))})${dropped ? `; ${dropped} point${dropped === 1 ? '' : 's'} on it removed` : ''}.`,
+  { ms: 6000 });
 }
 
 export function toggleLoop() {
@@ -374,7 +520,7 @@ function dragMove(i, ll) {
     last = performance.now();
     const s = snapAt(b, pending.ll.lng, pending.ll.lat);
     if (s) {
-      b.pts[pending.i] = { s };
+      b.pts[pending.i] = { s, here: b.pts[pending.i]?.here };
       computeLegs(b);
       drawLines();
     }
@@ -399,7 +545,7 @@ async function dragEnd(i, ll) {
     return;
   }
   if (before) pushUndo(b, before);
-  b.pts[i] = { s };
+  b.pts[i] = { s, here: b.pts[i]?.here };
   changed(b);
 }
 
@@ -463,12 +609,9 @@ export function renderRoute() {
   // first what the finger needs (the chart, with the map above the sheet), then what the route rides
   const out = [
     h('div', { class: 'row-btns' },
-      btn('Save', save, 'primary'),
+      b.nav ? btn('Continue', navContinue, 'primary') : btn('Save', save, 'primary'),
+      b.nav ? null : btn('Ride it', rideIt),
       h('button', { class: 'btn', type: 'button', onclick: undo, disabled: !b.undo.length }, 'Undo'),
-      btn('GPX', async () => {
-        const r = await shareGPX({ name: b.track?.name ?? b.title ?? `DirtScout route ${fmtDist(L)}`, fc: lineFc(routeLine(b), 'route') });
-        if (r === 'downloaded') ctx.toast('GPX saved to Downloads');
-      }),
       btn('Hide', () => ctx.closePanel())),
     h('div', { class: 'verdict' }, h('strong', {}, fmtDist(L)),
       h('span', {}, ` · ${b.pts.length} points${b.closed ? ' · a loop' : ''}${b.profile ? ` · ↑ ${fmtElev(b.profile.up)} ↓ ${fmtElev(b.profile.down)}` : ''}`)),
@@ -481,6 +624,13 @@ export function renderRoute() {
     out.push(h('p', { class: 'note' }, 'Drag a dot on the map to take another way (the red stretches are the steep ones), '
       + 'or tap the line to add a dot there. The chart follows.'));
   }
+  out.push(h('div', { class: 'row-btns' },
+    btn('Avoid a stretch', () => avoidMode(true)),
+    btn('GPX', async () => {
+      const r = await shareGPX({ name: b.track?.name ?? b.title ?? `DirtScout route ${fmtDist(L)}`, fc: lineFc(routeLine(b), 'route') });
+      if (r === 'downloaded') ctx.toast('GPX saved to Downloads');
+    })),
+  h('p', { class: 'note' }, 'Avoid: tap a stretch of track and the route goes around it. Ride it: navigate this route.'));
   out.push(
     h('h3', {}, 'What it rides'),
     h('div', { class: 'riskbar' }, h('i', { style: `width:${(st.risk[0] / L) * 100}%;background:#00c853` }),
@@ -499,18 +649,26 @@ export function renderRoute() {
 const lineFc = (coords, name) => ({ type: 'FeatureCollection',
   features: [{ type: 'Feature', properties: { name, kind: 'trk' }, geometry: { type: 'LineString', coordinates: coords } }] });
 
-export async function save() {
-  const b = B();
-  if (!b || b.pts.length < 2) return;
+// What a route made here is: its line, the stats a saved route keeps, and its points (with the avoided stretches).
+async function summary(b) {
   const coords = routeLine(b);
   const st = routeStats(b);
   const prof = b.profile || (await elevationProfile(coords, elevationAt));
-  const name = prompt('Name of this route', b.track?.name ?? `${b.title ?? 'My route'} ${fmtDist(st.len)} ${new Date().toLocaleDateString()}`);
-  if (name === null) return;
   const L = st.len || 1;
-  const stats = { up: prof?.up ?? 0, dn: prof?.down ?? 0, climbs: prof ? steepSections(prof, 15).filter((c) => c.dir > 0) : [],
+  const stats = { len: st.len, up: prof?.up ?? 0, dn: prof?.down ?? 0, climbs: prof ? steepSections(prof, 15).filter((c) => c.dir > 0) : [],
     green: st.risk[0] / L, yellow: st.risk[1] / L, red: st.risk[2] / L };
-  const built = { pts: b.pts.map((p) => [Math.round(p.s.lon * 1e6) / 1e6, Math.round(p.s.lat * 1e6) / 1e6]), closed: b.closed };
+  const r6 = (v) => Math.round(v * 1e6) / 1e6;
+  const built = { pts: b.pts.map((p) => [r6(p.s.lon), r6(p.s.lat)]), closed: b.closed,
+    avoid: [...b.avoidAt.values()].map(([lon, lat]) => [r6(lon), r6(lat)]) };
+  return { coords, stats, built, profile: prof || null };
+}
+
+export async function save() {
+  const b = B();
+  if (!b || b.pts.length < 2) return;
+  const { coords, stats, built } = await summary(b);
+  const name = prompt('Name of this route', b.track?.name ?? `${b.title ?? 'My route'} ${fmtDist(stats.len)} ${new Date().toLocaleDateString()}`);
+  if (name === null) return;
   const t = await savePlanned(name.trim() || 'My route', coords, stats, { ...(b.track?.plan ?? {}), built }, b.track?.color ?? COLOR, b.track?.id);
   close();
   await ctx.refreshTracks();

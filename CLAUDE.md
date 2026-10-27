@@ -7,10 +7,12 @@ pipeline/common.py and DEFAULT_AREA in app/src/config.js must match, and an old 
 
 ## Layout
 - `core/`: no-DOM ES modules shared by the app and Node: tilemath, geo, area (tile sets/corridors), gpx, scoring
-  (M3 verdicts), routing (M4: A*, loops with climbs), investigate (M5: map matching, profile, ways around), polyline.
+  (M3 verdicts), routing (M4: A*, loops with climbs), investigate (M5: map matching, profile, ways around), polyline,
+  builder (Make my own route), profile (elevation charts), nav (riding a route: where the rider is, turns, climb left).
 - `app/`: Vite root. `src/` = main, config (sources, area), settings (localStorage), db (IndexedDB), tiles
   (`offline://` and `slope://` protocols, overzoom, elevation), downloads (job queue), gps (position + recorder),
-  tracks, mapview, ui (panels). `sw.js` is the app-shell worker; the build fills in its precache list.
+  tracks, mapview, ui (panels), builder, nav (Navigate), terrain3d (the PC's 3D terrain). `sw.js` is the app-shell
+  worker; the build fills in its precache list.
 - `tests/`: `node --test` unit tests; `tests/e2e/m1.e2e.mjs` (offline map) and `m2.e2e.mjs` (area pack) = phone
   emulation in the local Chrome (playwright-core). The browser pane cannot screenshot while the app window is hidden:
   use these.
@@ -65,6 +67,26 @@ stay draggable, the chart dims and comes back with the same zoom, the steep stre
 without dots get them from core/builder.js pointsForLine (every 4 km, plus one where the builder's way leaves the
 line: generated 35 km loops come back the same within 0.1 % with 10-22 dots). Rides and imports keep a read-only
 profile with "Edit as my own route".
+Navigate (2026-10-27; core/nav.js + app/src/nav.js, tests/nav.test.js + tests/e2e/nav.e2e.mjs): a Navigate button
+on Tracks, Plan's route cards and the builder's route panel ("Ride it").
+- Before the start: away from the route, the banner shows the start (Google Maps / Waze links for the drive) and the
+  camera shows the rider and the start together. Within 35 m of the route the ride begins, and the ride recording
+  starts (settings.nav.record).
+- Turns: core/nav.js routeTurns uses graph junctions within 15 m of the line: a turn of 40 degrees or more, or a fork
+  where another way runs about as straight (keep left / right). Gaps are no branch; turn-backs count too.
+- Off the route: past 55 m (+ half the GPS accuracy), with a vibration.
+- Camera modes (settings.nav.mode): north, heading, follow (3D, pitch 60, the rider low on the screen). A pan stops
+  following until Re-centre; pinch zoom keeps it.
+- Quick buttons: layer chips (Satellite / Topo / Plain = settings.base 'none', and overlays), Edit, Record, zoom.
+- Edit opens the builder with a blue "here" dot inserted where the rider is (nav option of startBuilder). Avoid (also
+  in the route panel) marks a whole graph edge 50x dearer, kept as a place in plan.built.avoid. Continue hands back
+  {coords, built, stats, hereAlong} and the ride goes on from the dot.
+- The state is kept in localStorage (dirtscout.nav.v1) and resumes after a reload. The exit offers to save a changed
+  route and to stop the recording that navigation started.
+The PC's 3D terrain (app/src/terrain3d.js, a "3D" map button only with a mouse): a separate raster-dem source
+"terrain" (same tiles as "dem"), an exaggeration slider (settings.terrain3d), and the hillshade on by itself over the
+topo or no base map.
+
 When the owner asks to "investigate" a GPX: `node tools/investigate.mjs <gpx>`, then
 `uv run --with pillow python tools/imagery_crops.py private/reports/<name>`, look at the flag-*.jpg images, and report
 the verdict, risks with km markers and ways around. The imagery stays local (terms).

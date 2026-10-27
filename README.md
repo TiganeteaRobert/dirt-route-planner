@@ -47,6 +47,19 @@ Beliș-Fântânele to the Bihor heights, south to Aiud. An installable web app f
   colours each stretch (fine / doubtful / not on any mapped way), lists climbs, steep descents and risky stretches with
   km markers, and finds ways around the red stretches. On the PC, `tools/investigate.mjs` and
   `tools/imagery_crops.py` add an imagery check of the flagged stretches.
+- **Navigate:** ride any route (a saved track, a Plan route, your own route) with the phone on the handlebar.
+  - **Getting there:** away from the route, the banner shows the way to its start, with buttons that open Google Maps or
+    Waze for the drive.
+  - **On the route:** the next turn at each junction comes with its distance (turn, bear, keep left or right at a fork,
+    turn around), plus the steep stretches ahead and the km and climb left. Off the route, an arrow points back to it.
+  - **Camera:** north up, heading up (the map turns with you), or 3D from behind and above.
+  - **Quick buttons:** the base map (satellite, topo, or none) and the overlays (tracks, AI tracks, hillshade, slope,
+    contours, places), zoom, and the ride recording, which starts by itself at the start of the route.
+  - **Edit on the spot:** the route opens with a dot where you are. Drag a dot onto another track, or tap Avoid and then
+    a stretch, and the route goes around it. Continue rides the new route.
+  - **A reload:** the ride carries on.
+- **3D terrain (PC):** tilt and turn the map over the relief, with a slider that raises it (x1 to x5) so the steep
+  ground and the valleys read at a glance. Heights come from the ~30 m model.
 
 ## Install on Android
 

@@ -8,9 +8,11 @@ import { createMap, applyLayers, setTracks, setRecLine, setAiTiles, MeMarker } f
 import { loadStored as loadAi } from './aibundle.js';
 import { addBlobTiles } from './pack.js';
 import { initUI, toast, refreshAi } from './ui.js';
+import { resumeNav } from './nav.js';
+import { initTerrain3d, set3d } from './terrain3d.js';
 import { listTracks, mapData } from './tracks.js';
 import { downloader } from './downloads.js';
-import { recorder } from './gps.js';
+import { recorder, gps } from './gps.js';
 import { settings } from './settings.js';
 import * as db from './db.js';
 import * as wake from './wakelock.js';
@@ -33,11 +35,12 @@ app.refreshTracks = async () => {
   setTracks(app.map, mapData(app.tracks));
 };
 window.dirtscout = app;          // handy from the console when debugging on the phone, and for the e2e tests
-app.debug = { downloader, recorder, db, settings, applyLayers };
+app.debug = { downloader, recorder, gps, db, settings, applyLayers };
 app.ai = await loadAi();          // the owner's private AI layer, when it was unlocked on this phone
 if (app.ai?.tiles) addBlobTiles('ai', app.ai.tiles);
 
 initUI(app);
+initTerrain3d(app.map);          // the PC only
 
 app.map.on('load', async () => {
   if (app.ai?.tiles) setAiTiles(app.map, true);
@@ -55,6 +58,8 @@ app.map.on('load', async () => {
     toast('Your recording continues.');
   }
   if (settings.keepAwake) wake.want('user', true);
+  if (settings.terrain3d?.on) set3d(true, false);
+  resumeNav();                     // a route that was being ridden when the app closed
 });
 
 window.addEventListener('beforeinstallprompt', (e) => {

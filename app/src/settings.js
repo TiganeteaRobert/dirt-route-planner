@@ -5,7 +5,7 @@ const KEY = 'dirtscout.settings.v1';
 
 const DEFAULTS = {
   area: DEFAULT_AREA,
-  base: 'ms-earth',
+  base: 'ms-earth',           // a raster base, 'ds-topo', or 'none' (only the overlays)
   overlays: {
     area: { on: true, opacity: 1 },
     hillshade: { on: false, opacity: 0.5 },
@@ -27,6 +27,9 @@ const DEFAULTS = {
   aiMin: 0.4,                 // AI-found tracks: show and route on those scoring at least this (0.3-0.95)
   plan: { kmMin: 30, kmMax: 40, useAi: true, startMode: 'gps', start: null },   // Plan: length range, AI tracks, start
   steepRed: 45,               // elevation charts: grades at or above this (%) are red
+  nav: { mode: 'heading', zoom: 16.5, record: true },   // riding a route: camera (north, heading, follow = 3D), zoom, record
+  terrain3d: { on: false, exag: 1.5 },                  // the desktop's 3D terrain and how much the relief is raised
+  lastImagery: 'ms-earth',    // the imagery base the riding screen's Satellite button goes back to
   units: 'metric',
   bingHost: 'tiles',          // 'tiles' = tiles.virtualearth.net, 'ecn' = ecn.t0-3.tiles.virtualearth.net
   saveBrowse: false,          // also store tiles seen while browsing online
