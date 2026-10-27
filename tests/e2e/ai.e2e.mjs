@@ -174,7 +174,7 @@ try {
   }, TEST_PASS.toLowerCase().replace(/\s+/g, ''));
   await page.reload();
   await page.waitForFunction(() => window.dirtscout?.ai?.meta?.version === '2026-10-23.test01', null, { timeout: 60000 });
-  check(await page.evaluate(async () => (await window.dirtscout.debug.db.get('packs', 'ai')).format === 3),
+  check(await page.evaluate(async () => (await window.dirtscout.debug.db.get('packs', 'ai')).format === 4),
     'an AI file in the old format is replaced by the new one on its own');
 
   const bad = errors.filter((e) => !/Failed to load resource|ERR_INTERNET_DISCONNECTED|net::/.test(e));

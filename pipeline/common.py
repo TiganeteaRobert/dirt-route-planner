@@ -13,8 +13,9 @@ AREA.mkdir(parents=True, exist_ok=True)
 EDGES = ROOT / "data" / "ai" if os.environ.get("DS_AI") else AREA
 EDGES.mkdir(parents=True, exist_ok=True)
 
-# Riding area [west, south, east, north] - keep in sync with DEFAULT_AREA in app/src/config.js.
-BBOX = (22.85, 46.28, 23.80, 46.82)
+# Riding area [west, south, east, north] - keep in sync with DEFAULT_AREA in app/src/config.js. 2026-10-27: 25 % wider to
+# the west (was 22.85), so the dark-forested Apuseni heights the old edge cut through are in.
+BBOX = (22.61, 46.28, 23.80, 46.82)
 UA = "DirtScout-pipeline/0.1 (personal dirt-bike planner; github.com/TiganeteaRobert/dirt-route-planner)"
 
 

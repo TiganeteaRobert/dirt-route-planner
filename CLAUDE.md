@@ -1,7 +1,9 @@
 # DirtScout: notes for Claude sessions
 
 Offline dirt-bike route planner PWA for one riding area (Cluj-Napoca / Apuseni). The full plan, the owner's decisions
-and the research live in `private/HANDOFF.md` (gitignored). Read it before starting a milestone.
+and the research live in `private/HANDOFF.md` (gitignored). Read it before starting a milestone. The area is
+22.61-23.80 E, 46.28-46.82 N: widened 25 % to the west on 2026-10-27 (HANDOFF.md still says 22.85); BBOX in
+pipeline/common.py and DEFAULT_AREA in app/src/config.js must match, and an old default moves on by itself (OLD_AREAS).
 
 ## Layout
 - `core/`: no-DOM ES modules shared by the app and Node: tilemath, geo, area (tile sets/corridors), gpx, scoring

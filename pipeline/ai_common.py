@@ -44,11 +44,19 @@ def gy2lat(gy):
     return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * gy / (2 ** Z * 256)))))
 
 
+# The models were trained on a grid starting at tile x 73854 (the first area, west edge 22.85). When the area grows west
+# the origin moves by whole steps of 48 tiles (24 patches = 3 fold blocks of 8), so every patch keeps its fold and each
+# model still predicts only patches it never trained on.
+X_ANCHOR, X_STEP = 73854, 48
+
+
 def grid():
     """(X0, Y0, ni, nj) of the patch grid covering the area's tiles (the same range pipeline/imagery.py downloads)."""
     from imagery import tile_range
     x0, x1, y0, y1 = tile_range(Z)
     X0, Y0 = x0 // 2 * 2, y0 // 2 * 2
+    if X0 < X_ANCHOR:
+        X0 = X_ANCHOR - -(-(X_ANCHOR - X0) // X_STEP) * X_STEP
     return X0, Y0, (x1 - X0) // 2 + 1, (y1 - Y0) // 2 + 1
 
 

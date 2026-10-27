@@ -1,7 +1,7 @@
 # DirtScout
 
-An offline dirt-bike map for one riding area: Cluj-Napoca west into the Apuseni mountains past Lake Beliș-Fântânele,
-south to Aiud. An installable web app for Android (Chrome), built to work in airplane mode.
+An offline dirt-bike map for one riding area: Cluj-Napoca west across the Apuseni mountains, past Lake
+Beliș-Fântânele to the Bihor heights, south to Aiud. An installable web app for Android (Chrome), built to work in airplane mode.
 
 **App:** https://tiganetearobert.github.io/dirt-route-planner/
 

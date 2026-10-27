@@ -1,5 +1,5 @@
 // User settings, kept in localStorage (small and read synchronously at start-up, so the map opens where it was left).
-import { DEFAULT_AREA } from './config.js';
+import { DEFAULT_AREA, OLD_AREAS } from './config.js';
 
 const KEY = 'dirtscout.settings.v1';
 
@@ -53,6 +53,8 @@ function load() {
 }
 
 export const settings = load();
+// a phone that kept an earlier default area gets the new one (an area the rider set themselves stays)
+if (OLD_AREAS.some((a) => a.every((v, i) => Math.abs(v - settings.area[i]) < 1e-6))) settings.area = [...DEFAULT_AREA];
 
 export function saveSettings() {
   try { localStorage.setItem(KEY, JSON.stringify(settings)); } catch { /* storage blocked: settings last this session */ }

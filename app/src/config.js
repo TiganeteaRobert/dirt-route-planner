@@ -3,8 +3,10 @@
 
 export const APP_NAME = 'DirtScout';
 
-// [west, south, east, north]: Lake Belis-Fantanele (west) to Cluj-Napoca (NE) and Aiud (SE). Editable in Settings.
-export const DEFAULT_AREA = [22.85, 46.28, 23.80, 46.82];
+// [west, south, east, north]: the Apuseni heights past Lake Belis-Fantanele (west) to Cluj-Napoca (NE) and Aiud (SE).
+// Editable in Settings. Keep in sync with BBOX in pipeline/common.py. OLD_AREAS: earlier defaults, moved on by themselves.
+export const DEFAULT_AREA = [22.61, 46.28, 23.80, 46.82];
+export const OLD_AREAS = [[22.85, 46.28, 23.80, 46.82]];
 
 // offline: true = may be downloaded to the phone (user's decision D2 for the Microsoft and Esri imagery).
 // Online-only sources are volunteer-run OSM servers whose policies forbid bulk or offline download.

@@ -1000,7 +1000,7 @@ function aiCard() {
   const err = aiError ? h('p', { class: 'note warn' }, aiError) : null;
   if (app.ai?.stale) {
     return h('div', { class: 'card', id: 'ai-card' },
-      h('p', { class: 'note' }, 'Your AI tracks need a one-time update: the new file fixes routes that jumped across the map and joins the tracks across short gaps. It downloads with your saved passphrase.'),
+      h('p', { class: 'note' }, 'Your AI tracks need a one-time update: the new file covers the wider riding area. It downloads with your saved passphrase.'),
       progress, err,
       aiJob ? null : h('div', { class: 'row-btns' }, btn('Update', () => runAi(null), 'primary'), btn('Remove', removeAi)));
   }

@@ -8,9 +8,10 @@ import { decryptBundle, gunzipJson, normPass, WrongPassphrase } from '../../core
 
 export const AI_FILE = 'ai.enc';
 // What the phone keeps: 2 = map tiles + graph; 3 = the same, from a graph with every junction in its own place and
-// the gaps joined (a format-2 graph shared junction ids between far-apart places: its routes jumped across the map).
-// A stored file of another format is fetched again with the saved passphrase (main.js, refreshAi).
-export const AI_FORMAT = 3;
+// the gaps joined (a format-2 graph shared junction ids between far-apart places: its routes jumped across the map);
+// 4 = the same for the area widened west (2026-10-27). A stored file of another format is fetched again with the saved
+// passphrase (main.js, refreshAi).
+export const AI_FORMAT = 4;
 const KEYS = ['ai', 'ai-tiles', 'ai-graph'];
 let graphCache = null;
 

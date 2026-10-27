@@ -19,6 +19,8 @@ API = "https://api.openstreetmap.org/api/0.6/trackpoints?bbox={l:.5f},{b:.5f},{r
 CACHE = RAW / "traces"
 CACHE.mkdir(parents=True, exist_ok=True)
 GRID = 0.1
+GRID_W0 = 22.85            # the cells' west edge (the first area's): cells west of it get negative numbers, so the pages
+                           # already downloaded keep their names when the area grows
 MAX_PAGES = 20
 MIN_CELL = 0.012           # degrees: busier cells smaller than this are not split again
 TRK = re.compile(r"<trk>(.*?)</trk>", re.S)
@@ -84,10 +86,12 @@ def main():
     t0 = time.time()
     w, s, e, n = BBOX
     queue = []
-    nx, ny = int(np.ceil((e - w) / GRID)), int(np.ceil((n - s) / GRID))
+    i0, i1 = int(np.floor((w - GRID_W0) / GRID + 1e-9)), int(np.ceil((e - GRID_W0) / GRID - 1e-9))
+    ny = int(np.ceil((n - s) / GRID))
     for j in range(ny):
-        for i in range(nx):
-            queue.append((f"g{j:02d}_{i:02d}", (w + i * GRID, s + j * GRID, min(e, w + (i + 1) * GRID), min(n, s + (j + 1) * GRID))))
+        for i in range(i0, i1):
+            cell = (max(w, GRID_W0 + i * GRID), s + j * GRID, min(e, GRID_W0 + (i + 1) * GRID), min(n, s + (j + 1) * GRID))
+            queue.append((f"g{j:02d}_{i:02d}", cell))
     lon, lat, tid = [], [], []
     requests = 0
     done = 0
