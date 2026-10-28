@@ -89,9 +89,11 @@ JSON holds the builder's points (kind "b", from plan.built or pointsForLine on t
 with core/builder.js routeFromPoints (same costs and avoided stretches as the builder) and saves it with plan.sent
 (a signature: the same link twice adds nothing). Kind "l" = a line off the network, simplified to fit (lineForLink).
 decodeRoute validates and caps everything (links come from anywhere). Not for TET tracks. QR: npm uqr (pinned).
-Flying (app/src/fly.js, PC only, tests/e2e/fly.e2e.mjs): F = fly (W A S D, Q E down/up, drag/arrows look, Shift x5,
-speed from metres per pixel, keepAboveGround via the camera transform: m.transform ?? m._camera.transform in MapLibre
-6), O = orbit, [ ] = relief +-0.5, "Fly through" on Tracks / Plan / the builder (a route tour with play, x1-x8, scrub).
+Flying (app/src/fly.js, PC only, tests/e2e/fly.e2e.mjs): F, or a mouse button held + W A S D = fly (Space/R up,
+Q down, drag/arrows look, Shift x5; no Ctrl: Ctrl+W closes the tab). While flying the center is unclamped
+(setCenterClampedToGround(false), jumpTo elevation) so the camera holds its height (clamped, it bobbed with the
+ground under the center); land() re-anchors with calculateCameraOptionsFromTo on the ground at the screen's middle.
+Speed from metres per pixel; the camera transform is m.transform ?? m._camera.transform in MapLibre 6. O = orbit, [ ] = relief +-0.5, "Fly through" on Tracks / Plan / the builder (a route tour with play, x1-x8, scrub).
 Headless Chrome renders the 3D terrain in software (about 1 fps while terrain tiles load, slower when the GPU is busy):
 the e2e holds keys until the camera moved and compares the camera's velocities, not timed distances.
 The PC's 3D terrain (app/src/terrain3d.js, a "3D" map button only with a mouse): a separate raster-dem source

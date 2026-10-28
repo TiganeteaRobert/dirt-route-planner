@@ -1,7 +1,8 @@
 // Flying over the PC's 3D terrain, in a desktop browser: F starts flying (3D on, tilted), W flies forward the way the
-// camera looks, Shift makes it five times faster, D goes sideways, E up and Q down, the arrows and a mouse drag look
-// around (the map itself does not move), the camera does not dive into a mountain, ] raises the relief, Esc stops;
-// O orbits; a Plan route's "Fly through" rides it (Space pauses, the arrow skips 500 m, x8, Stop).
+// camera looks and the camera keeps its height over the ridges, Shift makes it five times faster, D goes sideways,
+// R / Space up and Q down, the arrows and a mouse drag look around (the map itself does not move), the camera does not
+// dive into a mountain, ] raises the relief, Esc lands without moving the camera; a mouse button held + W flies too
+// and letting go ends it; O orbits; a Plan route's "Fly through" rides it (Space pauses, the arrow skips 500 m, x8).
 // Headless Chrome draws the 3D terrain in software: while new terrain tiles load (or the PC is busy) it can drop to
 // about one frame a second. So each key is held until the camera has moved, the checks look at directions, and the
 // speeds are compared on the camera's own velocity, not on distances in a given time.
@@ -27,9 +28,10 @@ const shot = (name) => page.screenshot({ path: join(OUT, `${String(++step).padSt
 const check = (ok, msg) => { if (!ok) throw new Error(`FAILED: ${msg}`); console.log(`ok - ${msg}`); };
 const cam = () => page.evaluate(() => {
   const m = window.dirtscout.map, c = m.getCenter(), T = m.transform ?? m._camera.transform, f = window.dirtscout.debug.fly();
-  const ll = T.getCameraLngLat();
-  return { lon: c.lng, lat: c.lat, zoom: m.getZoom(), bearing: m.getBearing(), pitch: m.getPitch(), mode: f.mode, vel: f.vel, tour: f.tour,
-    exag: m.getTerrain()?.exaggeration ?? null, above: T.getCameraAltitude() - (m.queryTerrainElevation(ll) ?? 0), dragPan: m.dragPan.isEnabled() };
+  const ll = T.getCameraLngLat(), ground = m.queryTerrainElevation(ll) ?? 0;
+  return { lon: c.lng, lat: c.lat, zoom: m.getZoom(), bearing: m.getBearing(), pitch: m.getPitch(), mode: f.mode, temp: f.temp, vel: f.vel,
+    tour: f.tour, exag: m.getTerrain()?.exaggeration ?? null, camAlt: T.getCameraAltitude(), cam: { lon: ll.lng, lat: ll.lat }, ground,
+    above: T.getCameraAltitude() - ground, clamped: m.getCenterClampedToGround(), dragPan: m.dragPan.isEnabled() };
 });
 const R = 6371008.8, RAD = Math.PI / 180;
 const moved = (a, b) => {
@@ -82,15 +84,22 @@ try {
   const w = await hold(['w'], (a, b) => moved(a, b).d > 60 && b.vel.f > 0 && Math.abs(b.vel.f - a.vel.f) < 1e9, 'f');
   const fw = moved(w.a, w.b);
   check(angle(fw.dir, w.a.bearing) < 8, `W: forward the way the camera looks (${Math.round(fw.d)} m towards ${Math.round(fw.dir)}°, looking ${Math.round(w.a.bearing)}°)`);
-  const sw = await hold(['Shift', 'w'], (a, b) => moved(a, b).d > 60, 'f');
+  // fast and far, over the ridges: the camera's height stays the same while the ground under it rises and falls
+  const heights = [], grounds = [];
+  const sw = await hold(['Shift', 'w'], (a, b) => { heights.push(b.camAlt); grounds.push(b.ground); return moved(a, b).d > 2500; }, 'f');
   check(sw.top > w.top * 3.5, `Shift: five times the speed (${Math.round(sw.top)} m/s against ${Math.round(w.top)} m/s)`);
+  const spread = (x) => Math.max(...x) - Math.min(...x);
+  check(spread(heights) < 3 && spread(grounds) > 30, `over ${Math.round(moved(sw.a, sw.b).d)} m the camera kept its height (within ${spread(heights).toFixed(1)} m) `
+    + `while the ground under it changed by ${Math.round(spread(grounds))} m`);
   const d = await hold(['d'], (a, b) => moved(a, b).d > 40);
   const sd = moved(d.a, d.b);
   check(angle(sd.dir, d.a.bearing + 90) < 8, `D: sideways to the right (${Math.round(sd.dir)}°, looking ${Math.round(d.a.bearing)}°)`);
-  const up = await hold(['e'], (a, b) => b.zoom < a.zoom - 0.15);
-  check(up.b.zoom < up.a.zoom - 0.1, `E: up (zoom ${up.a.zoom.toFixed(2)} -> ${up.b.zoom.toFixed(2)})`);
-  const dn = await hold(['q'], (a, b) => b.zoom > a.zoom + 0.15);
-  check(dn.b.zoom > dn.a.zoom + 0.1, `Q: down (zoom ${dn.a.zoom.toFixed(2)} -> ${dn.b.zoom.toFixed(2)})`);
+  const up = await hold(['r'], (a, b) => b.camAlt > a.camAlt + 150);
+  check(up.b.camAlt > up.a.camAlt + 100 && moved(up.a, up.b).d < 5, `R: straight up (${Math.round(up.a.camAlt)} -> ${Math.round(up.b.camAlt)} m)`);
+  const sp = await hold(['Space'], (a, b) => b.camAlt > a.camAlt + 150);
+  check(sp.b.camAlt > sp.a.camAlt + 100, `Space: up too (${Math.round(sp.a.camAlt)} -> ${Math.round(sp.b.camAlt)} m)`);
+  const dn = await hold(['q'], (a, b) => b.camAlt < a.camAlt - 150);
+  check(dn.b.camAlt < dn.a.camAlt - 100, `Q: down (${Math.round(dn.a.camAlt)} -> ${Math.round(dn.b.camAlt)} m)`);
   const turn = await hold(['ArrowRight'], (a, b) => angle(a.bearing, b.bearing) > 10);
   check(angle(turn.b.bearing, turn.a.bearing) > 8 && moved(turn.a, turn.b).d < 5, `the arrows turn on the spot (${Math.round(turn.a.bearing)}° -> ${Math.round(turn.b.bearing)}°)`);
   let a = await settled();
@@ -102,17 +111,42 @@ try {
   let b = await cam();
   check(angle(b.bearing, a.bearing) > 30 && moved(a, b).d < 5, `a drag looks around without moving the map (turned ${Math.round(angle(b.bearing, a.bearing))}°)`);
   // down hard into the mountains: the camera stays above the ground
-  const dive = await hold(['Shift', 'q'], (p, q) => q.zoom > p.zoom + 2.5);
-  check(dive.b.above > 25, `diving: the camera stays above the ground (${Math.round(dive.b.above)} m above it, zoom ${dive.b.zoom.toFixed(1)})`);
+  const dive = await hold(['Shift', 'q'], (p, q) => q.above < 45);
+  check(dive.b.above > 25, `diving: the camera stops above the ground (${Math.round(dive.b.above)} m above it)`);
   await shot('low');
   await page.keyboard.press(']');
   await page.waitForTimeout(300);
   const ex = (await cam()).exag;
   check(Math.abs(ex - (dive.b.exag + 0.5)) < 0.01, `] raises the relief (×${dive.b.exag} -> ×${ex})`);
+  // a higher relief lifts the ground under the low camera: it rises clear of it; then, at rest, Esc
+  for (let i = 0, same = 0, prev = null; i < 120 && same < 3; i++) {
+    await page.waitForTimeout(300);
+    const q = await cam();
+    same = prev != null && Math.abs(q.camAlt - prev) < 0.5 ? same + 1 : 0;
+    prev = q.camAlt;
+  }
+  a = await settled();
+  check(a.above > 25, `the camera rose clear of the raised ground (${Math.round(a.above)} m above it)`);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
   c = await cam();
   check(c.mode === null && c.dragPan && await page.locator('#fly-hud').isHidden(), 'Esc stops flying: the mouse moves the map again');
+  const shift = moved(a.cam, c.cam).d;
+  check(c.clamped && shift < 10 && Math.abs(c.camAlt - a.camAlt) < 10, `and lands without moving the camera (${shift.toFixed(1)} m, ${Math.abs(c.camAlt - a.camAlt).toFixed(1)} m up/down)`);
+  // a mouse button held on the map + W: flying until the button is let go
+  await page.mouse.move(550, 350);
+  await page.mouse.down();
+  a = await cam();
+  await page.keyboard.down('w');
+  await page.waitForFunction((p) => { const q = window.dirtscout.map.getCenter(); return Math.hypot((q.lng - p[0]) * 76400, (q.lat - p[1]) * 111200) > 60; },
+    [a.lon, a.lat], { timeout: 30000 }).catch(() => {});
+  c = await cam();
+  check(c.mode === 'fly' && c.temp && moved(a, c).d > 60, `hold the mouse + W: flying (${Math.round(moved(a, c).d)} m)`);
+  await page.keyboard.up('w');
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  c = await cam();
+  check(c.mode === null && c.clamped && c.dragPan, 'letting go of the button ends the flight');
   // orbit
   a = await cam();
   await page.keyboard.press('o');
